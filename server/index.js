@@ -48,6 +48,7 @@ function getAiConfig() {
     apiKey: process.env.DEEPSEEK_KEY || '',
     apiModel: 'deepseek-v4-flash',
     apiType: '',
+    maxOutputTokens: 4096,
   };
   try {
     const db = require('./db');
@@ -59,12 +60,122 @@ function getAiConfig() {
       apiKey: map.api_key || DEFAULTS.apiKey,
       apiModel: map.api_model || DEFAULTS.apiModel,
       apiType: map.api_type || DEFAULTS.apiType,
+      maxOutputTokens: parseInt(map.max_output_tokens, 10) || DEFAULTS.maxOutputTokens,
     };
     return aiConfigCache;
   } catch (e) {
     return { ...DEFAULTS };
   }
 }
+
+
+// ─── AI Provider Profiles (multi-profile management) ───
+// providers is stored as a JSON array in app_settings. The active profile is
+// flattened into the legacy api_* keys on save, so every existing AI route
+// (chat / chat/stream / continue / test) keeps working without changes.
+
+function loadProviders() {
+  const db = require('./db');
+  const rows = db.dbQuery("SELECT key, value FROM app_settings WHERE key IN ('providers', 'active_provider_id')");
+  const map = {};
+  for (const r of rows) map[r.key] = r.value;
+  if (map.providers) {
+    try {
+      const providers = JSON.parse(map.providers);
+      if (Array.isArray(providers) && providers.length > 0) {
+        return { providers, activeId: map.active_provider_id || providers[0].id };
+      }
+    } catch { /* corrupted JSON — fall through to migration */ }
+  }
+  // First run: migrate legacy flat settings into a default profile
+  const ai = getAiConfig();
+  const providers = [{
+    id: 'default',
+    name: '默认',
+    type: ai.apiType || 'openai',
+    baseUrl: ai.apiBaseUrl,
+    apiKey: ai.apiKey,
+    model: ai.apiModel,
+    contextLimit: 128000,
+    maxTokens: 4096,
+  }];
+  persistProviders(providers, 'default');
+  return { providers, activeId: 'default' };
+}
+
+function persistProviders(providers, activeId) {
+  const db = require('./db');
+  db.dbExecute('INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)', ['providers', JSON.stringify(providers)]);
+  db.dbExecute('INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)', ['active_provider_id', activeId]);
+  const active = providers.find(p => p.id === activeId) || providers[0];
+  if (active) {
+    const flat = [
+      ['api_base_url', active.baseUrl || ''],
+      ['api_key', active.apiKey || ''],
+      ['api_model', active.model || ''],
+      ['api_type', active.type || 'openai'],
+      ['max_output_tokens', String(active.maxTokens || 4096)],
+    ];
+    for (const [key, value] of flat) {
+      db.dbExecute('INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)', [key, value]);
+    }
+  }
+}
+
+app.get('/api/ai/providers', (req, res) => {
+  try {
+    res.json(loadProviders());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/ai/providers', (req, res) => {
+  const { providers, activeId } = req.body || {};
+  if (!Array.isArray(providers) || providers.length === 0) {
+    return res.status(400).json({ error: 'providers 数组不能为空' });
+  }
+  if (!providers.some(p => p.id === activeId)) {
+    return res.status(400).json({ error: 'activeId 必须对应 providers 中的一项' });
+  }
+  persistProviders(providers, activeId);
+  invalidateAiConfigCache();
+  res.json({ success: true });
+});
+
+// ─── Fetch available models under a key (proxied: no CORS, key stays server-side) ───
+
+app.post('/api/ai/models', async (req, res) => {
+  try {
+    const { baseUrl, apiKey, type } = req.body || {};
+    if (!baseUrl) return res.status(400).json({ error: '缺少 baseUrl' });
+
+    let url = baseUrl.replace(/\/+$/, '');
+    const headers = { 'Content-Type': 'application/json' };
+    if (type === 'claude') {
+      // Anthropic models endpoint: {base}/v1/models with x-api-key
+      if (!/\/v\d+$/.test(url)) url += '/v1';
+      url += '/models';
+      headers['x-api-key'] = apiKey || '';
+      headers['anthropic-version'] = '2023-06-01';
+    } else {
+      // OpenAI & OpenAI Responses: {base}/models with Bearer
+      url += '/models';
+      headers['Authorization'] = `Bearer ${apiKey || ''}`;
+    }
+
+    const response = await fetch(url, { headers });
+    if (!response.ok) {
+      const errText = await response.text();
+      return res.status(502).json({ error: `上游返回 ${response.status}`, detail: errText.slice(0, 300) });
+    }
+    const data = await response.json();
+    const models = (data.data || []).map(m => m.id).filter(Boolean).sort();
+    res.json({ models });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 
 // ─── AI Chat Completion (non-streaming) ───

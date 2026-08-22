@@ -1,10 +1,12 @@
-import { Bot, Download, Eye, EyeOff, Globe, Palette, Pen, RotateCw, SwatchBook, X, Zap } from 'lucide-react'
-import { useState } from 'react'
+import { Bot, Download, Eye, EyeOff, Globe, Palette, Pen, Plus, RotateCw, SwatchBook, X, Zap } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { useT } from '@/hooks/useT'
 import { refreshAllData } from '@/lib/dataEvents'
+import { modelsApi } from '@/lib/api'
 import { useEditorStore } from '@/stores/useEditorStore'
 import { useSettingsStore } from '@/stores/useSettingsStore'
 import { useUIStore } from '@/stores/useUIStore'
+import type { AIProviderProfile } from '@/types'
 
 const ACCENT_COLORS = ['#c9a96e', '#e06c75', '#61afef', '#98c379', '#c678dd', '#d4a040', '#56b6c2']
 
@@ -17,7 +19,18 @@ function applyAccentColor(color: string) {
 
 export function SettingsDrawer() {
   const { settingsOpen, closeSettings } = useUIStore()
-  const { settings, updateSetting } = useSettingsStore()
+  const {
+    settings,
+    updateSetting,
+    providers,
+    activeProviderId,
+    providersLoaded,
+    loadProviders,
+    switchProvider,
+    updateProvider,
+    addProvider,
+    deleteProvider,
+  } = useSettingsStore()
   const { t } = useT()
   const [showApiKey, setShowApiKey] = useState(false)
   const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'ok' | 'fail'>('idle')
@@ -26,6 +39,30 @@ export function SettingsDrawer() {
   const [updateStatus, setUpdateStatus] = useState<'idle' | 'checking' | 'upToDate' | 'available' | 'error'>('idle')
   const [latestVersion, setLatestVersion] = useState('')
   const [releaseUrl, setReleaseUrl] = useState('')
+  const [modelList, setModelList] = useState<string[]>([])
+  const [modelsStatus, setModelsStatus] = useState<'idle' | 'fetching' | 'ok' | 'fail'>('idle')
+  const [modelsMsg, setModelsMsg] = useState('')
+
+  const active = providers.find((p) => p.id === activeProviderId) || providers[0]
+
+  useEffect(() => {
+    if (!providersLoaded) loadProviders()
+  }, [providersLoaded, loadProviders])
+
+  const handleFetchModels = async () => {
+    if (!active) return
+    setModelsStatus('fetching')
+    setModelsMsg('')
+    try {
+      const { models } = await modelsApi.list(active.baseUrl, active.apiKey, active.type)
+      setModelList(models)
+      setModelsStatus('ok')
+      setModelsMsg(t('settings.modelsFetched', { count: models.length }))
+    } catch (err: any) {
+      setModelsStatus('fail')
+      setModelsMsg(err.message || 'Network error')
+    }
+  }
 
   const checkForUpdates = async () => {
     setUpdateStatus('checking')
@@ -264,54 +301,146 @@ export function SettingsDrawer() {
             <div className="text-[11px] font-medium text-[var(--ink-mute)] tracking-[0.06em] uppercase mb-3">
               <Bot className="w-3.5 h-3.5 inline-block mr-1" /> {t('settings.aiService')}
             </div>
-            <SettingRow label={t('settings.apiType')} desc={t('settings.apiTypeDesc')}>
-              <select
-                className="h-[30px] px-2.5 bg-[var(--canvas-elevated)] border border-[var(--hairline)] rounded-[var(--radius-sm)] text-[var(--ink)] text-[13px] outline-none cursor-pointer focus:border-[var(--accent-gold)] w-[150px]"
-                value={settings.apiType}
-                onChange={(e) => updateSetting('apiType', e.target.value as 'openai' | 'openai-response' | 'claude')}
-              >
-                <option value="openai">OpenAI</option>
-                <option value="openai-response">OpenAI Responses</option>
-                <option value="claude">Anthropic</option>
-              </select>
-            </SettingRow>
-            <SettingRow label={t('settings.apiBaseUrl')}>
-              <input
-                type="url"
-                className="h-[30px] px-2 bg-[var(--canvas-elevated)] border border-[var(--hairline)] rounded-[var(--radius-sm)] text-[var(--ink)] text-[12px] font-mono outline-none focus:border-[var(--accent-gold)] w-[200px]"
-                value={settings.apiBaseUrl}
-                onChange={(e) => updateSetting('apiBaseUrl', e.target.value)}
-                placeholder="https://api.deepseek.com/v1"
-              />
-            </SettingRow>
-            <SettingRow label={t('settings.model')}>
-              <div className="flex gap-1.5 items-center">
-                <input
-                  type="text"
-                  className="h-[30px] px-2 bg-[var(--canvas-elevated)] border border-[var(--hairline)] rounded-[var(--radius-sm)] text-[var(--ink)] text-[12px] font-mono outline-none focus:border-[var(--accent-gold)] w-[200px]"
-                  value={settings.apiModel}
-                  onChange={(e) => updateSetting('apiModel', e.target.value)}
-                  placeholder="deepseek-v4-flash"
-                />
-              </div>
-            </SettingRow>
-            <SettingRow label={t('settings.apiKey')}>
+            <SettingRow label={t('settings.providerProfile')} desc={t('settings.providerProfileDesc')}>
               <div className="flex gap-1 items-center">
-                <input
-                  type={showApiKey ? 'text' : 'password'}
-                  className="h-[30px] px-2 bg-[var(--canvas-elevated)] border border-[var(--hairline)] rounded-[var(--radius-sm)] text-[var(--ink)] text-[12px] font-mono outline-none focus:border-[var(--accent-gold)] w-[180px]"
-                  value={settings.apiKey}
-                  onChange={(e) => updateSetting('apiKey', e.target.value)}
-                />
-                <button
-                  className="w-7 h-7 flex items-center justify-center rounded-[var(--radius-sm)] border-none bg-none text-[var(--ink-tertiary)] cursor-pointer hover:text-[var(--ink)] transition-colors shrink-0"
-                  onClick={() => setShowApiKey(!showApiKey)}
-                  title={showApiKey ? t('settings.hideKey') : t('settings.showKey')}
+                <select
+                  className="h-[30px] px-2.5 bg-[var(--canvas-elevated)] border border-[var(--hairline)] rounded-[var(--radius-sm)] text-[var(--ink)] text-[13px] outline-none cursor-pointer focus:border-[var(--accent-gold)] w-[120px]"
+                  value={activeProviderId}
+                  onChange={(e) => switchProvider(e.target.value)}
                 >
-                  {showApiKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                  {providers.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  className="w-7 h-7 flex items-center justify-center rounded-[var(--radius-sm)] border border-[var(--hairline)] bg-[var(--canvas-elevated)] text-[var(--ink-secondary)] text-[15px] cursor-pointer hover:bg-[var(--canvas-mid)] shrink-0"
+                  onClick={addProvider}
+                  title={t('settings.addProvider')}
+                >
+                  +
+                </button>
+                <button
+                  className="w-7 h-7 flex items-center justify-center rounded-[var(--radius-sm)] border border-[var(--hairline)] bg-[var(--canvas-elevated)] text-[var(--ink-secondary)] text-[14px] cursor-pointer hover:bg-[var(--canvas-mid)] disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+                  onClick={() => active && deleteProvider(active.id)}
+                  disabled={providers.length <= 1}
+                  title={t('settings.deleteProvider')}
+                >
+                  ×
                 </button>
               </div>
             </SettingRow>
+            {active && (
+              <>
+                <SettingRow label={t('settings.providerName')}>
+                  <input
+                    type="text"
+                    className="h-[30px] px-2 bg-[var(--canvas-elevated)] border border-[var(--hairline)] rounded-[var(--radius-sm)] text-[var(--ink)] text-[12px] outline-none focus:border-[var(--accent-gold)] w-[160px]"
+                    value={active.name}
+                    onChange={(e) => updateProvider(active.id, { name: e.target.value })}
+                  />
+                </SettingRow>
+                <SettingRow label={t('settings.apiType')} desc={t('settings.apiTypeDesc')}>
+                  <select
+                    className="h-[30px] px-2.5 bg-[var(--canvas-elevated)] border border-[var(--hairline)] rounded-[var(--radius-sm)] text-[var(--ink)] text-[13px] outline-none cursor-pointer focus:border-[var(--accent-gold)] w-[150px]"
+                    value={active.type}
+                    onChange={(e) => updateProvider(active.id, { type: e.target.value as AIProviderProfile['type'] })}
+                  >
+                    <option value="openai">OpenAI</option>
+                    <option value="openai-response">OpenAI Responses</option>
+                    <option value="claude">Anthropic</option>
+                  </select>
+                </SettingRow>
+                <SettingRow label={t('settings.apiBaseUrl')}>
+                  <input
+                    type="url"
+                    className="h-[30px] px-2 bg-[var(--canvas-elevated)] border border-[var(--hairline)] rounded-[var(--radius-sm)] text-[var(--ink)] text-[12px] font-mono outline-none focus:border-[var(--accent-gold)] w-[200px]"
+                    value={active.baseUrl}
+                    onChange={(e) => updateProvider(active.id, { baseUrl: e.target.value })}
+                    placeholder="https://api.deepseek.com/v1"
+                  />
+                </SettingRow>
+                <SettingRow label={t('settings.model')} desc={t('settings.modelDesc')}>
+                  <div className="flex gap-1 items-center">
+                    <input
+                      type="text"
+                      list="ai-model-options"
+                      className="h-[30px] px-2 bg-[var(--canvas-elevated)] border border-[var(--hairline)] rounded-[var(--radius-sm)] text-[var(--ink)] text-[12px] font-mono outline-none focus:border-[var(--accent-gold)] w-[160px]"
+                      value={active.model}
+                      onChange={(e) => updateProvider(active.id, { model: e.target.value })}
+                      placeholder="deepseek-v4-flash"
+                    />
+                    <datalist id="ai-model-options">
+                      {modelList.map((m) => (
+                        <option key={m} value={m} />
+                      ))}
+                    </datalist>
+                    <button
+                      className="h-[30px] px-2 rounded-[var(--radius-sm)] border border-[var(--hairline)] bg-[var(--canvas-elevated)] text-[var(--ink-secondary)] text-[12px] cursor-pointer hover:bg-[var(--canvas-mid)] disabled:opacity-50 shrink-0 whitespace-nowrap"
+                      onClick={handleFetchModels}
+                      disabled={modelsStatus === 'fetching'}
+                      title={t('settings.fetchModels')}
+                    >
+                      {modelsStatus === 'fetching' ? '…' : '⟳'}
+                    </button>
+                  </div>
+                </SettingRow>
+                {modelsStatus === 'ok' && (
+                  <div className="text-[11px] text-[var(--success)] border-t border-[var(--hairline)] pt-1.5">
+                    {modelsMsg}
+                  </div>
+                )}
+                {modelsStatus === 'fail' && (
+                  <div className="text-[11px] text-[var(--error)] border-t border-[var(--hairline)] pt-1.5">
+                    {t('settings.fetchModelsFailed')}：{modelsMsg}
+                  </div>
+                )}
+                <SettingRow label={t('settings.contextLimit')} desc={t('settings.contextLimitDesc')}>
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="number"
+                      className="h-[30px] px-2 w-[100px] text-right bg-[var(--canvas-elevated)] border border-[var(--hairline)] rounded-[var(--radius-sm)] text-[var(--ink)] text-[12px] outline-none focus:border-[var(--accent-gold)]"
+                      value={active.contextLimit}
+                      min={4096}
+                      step={1000}
+                      onChange={(e) => updateProvider(active.id, { contextLimit: parseInt(e.target.value) || 0 })}
+                    />
+                    <span className="text-[11px] text-[var(--ink-mute)]">tokens</span>
+                  </div>
+                </SettingRow>
+                <SettingRow label={t('settings.maxTokens')} desc={t('settings.maxTokensDesc')}>
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="number"
+                      className="h-[30px] px-2 w-[100px] text-right bg-[var(--canvas-elevated)] border border-[var(--hairline)] rounded-[var(--radius-sm)] text-[var(--ink)] text-[12px] outline-none focus:border-[var(--accent-gold)]"
+                      value={active.maxTokens}
+                      min={256}
+                      step={256}
+                      onChange={(e) => updateProvider(active.id, { maxTokens: parseInt(e.target.value) || 0 })}
+                    />
+                    <span className="text-[11px] text-[var(--ink-mute)]">tokens</span>
+                  </div>
+                </SettingRow>
+                <SettingRow label={t('settings.apiKey')}>
+                  <div className="flex gap-1 items-center">
+                    <input
+                      type={showApiKey ? 'text' : 'password'}
+                      className="h-[30px] px-2 bg-[var(--canvas-elevated)] border border-[var(--hairline)] rounded-[var(--radius-sm)] text-[var(--ink)] text-[12px] font-mono outline-none focus:border-[var(--accent-gold)] w-[180px]"
+                      value={active.apiKey}
+                      onChange={(e) => updateProvider(active.id, { apiKey: e.target.value })}
+                    />
+                    <button
+                      className="w-7 h-7 flex items-center justify-center rounded-[var(--radius-sm)] border-none bg-none text-[var(--ink-tertiary)] cursor-pointer hover:text-[var(--ink)] transition-colors shrink-0"
+                      onClick={() => setShowApiKey(!showApiKey)}
+                      title={showApiKey ? t('settings.hideKey') : t('settings.showKey')}
+                    >
+                      {showApiKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+                </SettingRow>
+              </>
+            )}
             <div className="pt-2.5 flex flex-col gap-1.5">
               <div className="flex items-center gap-2.5">
                 <button

@@ -162,7 +162,7 @@ class OpenAIProvider {
       messages: [{ role: 'system', content: systemPrompt }, ...messages],
       tools: tools || undefined,
       temperature: temperature ?? 0.8,
-      max_tokens: 4096,
+      max_tokens: apiConfig.maxOutputTokens || 4096,
       stream: false,
     };
 
@@ -205,7 +205,7 @@ class OpenAIProvider {
       model: apiConfig.apiModel,
       messages: [{ role: 'system', content: systemPrompt }, ...messages],
       temperature: temperature ?? 0.85,
-      max_tokens: 4096,
+      max_tokens: apiConfig.maxOutputTokens || 4096,
       stream: true,
     };
 
@@ -289,7 +289,7 @@ class OpenAIResponsesProvider {
       input: toResponsesInput(messages),
       tools: toResponsesTools(tools),
       temperature: temperature ?? 0.8,
-      max_output_tokens: 4096,
+      max_output_tokens: apiConfig.maxOutputTokens || 4096,
       store: false,
       stream: false,
     });
@@ -314,7 +314,7 @@ class OpenAIResponsesProvider {
         instructions: systemPrompt,
         input: toResponsesInput(messages),
         temperature: temperature ?? 0.85,
-        max_output_tokens: 4096,
+        max_output_tokens: apiConfig.maxOutputTokens || 4096,
         store: false,
         stream: true,
       }),
@@ -393,7 +393,7 @@ class ClaudeProvider {
       model: apiConfig.apiModel,
       system: systemPrompt,
       messages: toClaudeMessages(messages),
-      max_tokens: 4096,
+      max_tokens: apiConfig.maxOutputTokens || 4096,
       temperature: temperature ?? 0.8,
     };
 
@@ -429,7 +429,7 @@ class ClaudeProvider {
       model: apiConfig.apiModel,
       system: systemPrompt,
       messages: toClaudeMessages(messages),
-      max_tokens: 4096,
+      max_tokens: apiConfig.maxOutputTokens || 4096,
       temperature: temperature ?? 0.85,
     });
 

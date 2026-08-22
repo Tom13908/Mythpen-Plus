@@ -152,6 +152,20 @@ export const settingsApi = {
   update: (key: string, value: string) => request('/settings', { method: 'PUT', body: { key, value } }),
 }
 
+// ─── AI Provider Profiles & Model Listing ───
+
+export const providersApi = {
+  get: (): Promise<{ providers: import('@/types').AIProviderProfile[]; activeId: string }> => request('/ai/providers'),
+  save: (providers: import('@/types').AIProviderProfile[], activeId: string) =>
+    request('/ai/providers', { method: 'PUT', body: { providers, activeId } }),
+}
+
+export const modelsApi = {
+  /** 获取指定密钥下可用的模型列表（服务端代理转发） */
+  list: (baseUrl: string, apiKey: string, type: string): Promise<{ models: string[] }> =>
+    request('/ai/models', { method: 'POST', body: { baseUrl, apiKey, type } }),
+}
+
 // ─── Chat / AI (always uses HTTP) ───
 
 function aiRequest(path: string, options: any = {}) {

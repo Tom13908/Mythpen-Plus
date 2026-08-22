@@ -1,13 +1,22 @@
 import { create } from 'zustand'
 import { setLanguage } from '@/i18n'
-import { settingsApi } from '@/lib/api'
-import type { AppSettings } from '@/types'
+import { providersApi, settingsApi } from '@/lib/api'
+import type { AIProviderProfile, AppSettings } from '@/types'
 
 interface SettingsState {
   settings: AppSettings
   langVersion: number
+  providers: AIProviderProfile[]
+  activeProviderId: string
+  providersLoaded: boolean
   updateSetting: <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => void
   loadFromServer: () => Promise<void>
+  saveProvidersLocal: (providers: AIProviderProfile[], activeId: string) => void
+  loadProviders: () => Promise<void>
+  switchProvider: (id: string) => void
+  updateProvider: (id: string, patch: Partial<AIProviderProfile>) => void
+  addProvider: () => void
+  deleteProvider: (id: string) => void
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -56,6 +65,19 @@ function loadSettings(): AppSettings {
 
 const initialSettings = loadSettings()
 
+/** 把激活档案的字段镜像到扁平 settings（测试连接等既有流程直接读取这些字段） */
+function applyActiveToSettings(settings: AppSettings, active?: AIProviderProfile): AppSettings {
+  if (!active) return settings
+  return {
+    ...settings,
+    apiKey: active.apiKey,
+    apiBaseUrl: active.baseUrl,
+    apiModel: active.model,
+    apiType: active.type,
+    maxOutputTokens: active.maxTokens,
+  }
+}
+
 // Sync i18n module with persisted language preference
 if (initialSettings.uiLanguage !== 'zh') {
   setLanguage(initialSettings.uiLanguage)
@@ -64,6 +86,9 @@ if (initialSettings.uiLanguage !== 'zh') {
 export const useSettingsStore = create<SettingsState>((set, get) => ({
   settings: initialSettings,
   langVersion: 0,
+  providers: [],
+  activeProviderId: '',
+  providersLoaded: false,
 
   loadFromServer: async () => {
     try {
@@ -136,4 +161,62 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       }
       return { settings: newSettings, ...extra }
     }),
+
+  // ─── AI Provider Profiles ───
+
+  saveProvidersLocal: (providers, activeId) => {
+    const s = get()
+    const active = providers.find((p) => p.id === activeId) || providers[0]
+    const settings = applyActiveToSettings(s.settings, active)
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(settings))
+    set({ providers, activeProviderId: activeId, settings })
+    providersApi.save(providers, activeId).catch(() => {})
+  },
+
+  loadProviders: async () => {
+    try {
+      const { providers, activeId } = await providersApi.get()
+      const active = providers.find((p) => p.id === activeId) || providers[0]
+      const settings = applyActiveToSettings(get().settings, active)
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(settings))
+      set({ providers, activeProviderId: activeId, providersLoaded: true, settings })
+    } catch {
+      // server not reachable — keep empty list
+    }
+  },
+
+  switchProvider: (id) => {
+    get().saveProvidersLocal(get().providers, id)
+  },
+
+  updateProvider: (id, patch) => {
+    const providers = get().providers.map((p) => (p.id === id ? { ...p, ...patch } : p))
+    get().saveProvidersLocal(providers, get().activeProviderId)
+  },
+
+  addProvider: () => {
+    const id = `p-${Date.now()}`
+    const providers: AIProviderProfile[] = [
+      ...get().providers,
+      {
+        id,
+        name: `档案 ${get().providers.length + 1}`,
+        type: 'openai',
+        baseUrl: 'https://api.deepseek.com/v1',
+        apiKey: '',
+        model: 'deepseek-v4-flash',
+        contextLimit: 128000,
+        maxTokens: 4096,
+      },
+    ]
+    get().saveProvidersLocal(providers, id)
+  },
+
+  deleteProvider: (id) => {
+    const cur = get().providers
+    if (cur.length <= 1) return // 至少保留一个档案（服务端也拒绝空数组）
+    const providers = cur.filter((p) => p.id !== id)
+    const activeId = get().activeProviderId === id ? providers[0].id : get().activeProviderId
+    get().saveProvidersLocal(providers, activeId)
+  },
 }))

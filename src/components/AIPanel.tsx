@@ -10,6 +10,7 @@ import { useProjectName } from '@/lib/useProjectData'
 import { useAgentStore } from '@/stores/useAgentStore'
 import { useChapterStore } from '@/stores/useChapterStore'
 import { useProjectStore } from '@/stores/useProjectStore'
+import { useSettingsStore } from '@/stores/useSettingsStore'
 import { useUIStore } from '@/stores/useUIStore'
 
 export function AIPanel() {
@@ -51,6 +52,11 @@ export function AIPanel() {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const { toasts, show: showToast } = useToast()
   const { t } = useT()
+  const { providers, activeProviderId, providersLoaded, loadProviders, switchProvider } = useSettingsStore()
+
+  useEffect(() => {
+    if (!providersLoaded) loadProviders()
+  }, [providersLoaded, loadProviders])
 
   // Resize handle drag logic
   const handleResizeMouseDown = useCallback(
@@ -359,6 +365,21 @@ export function AIPanel() {
               {t('ai.modeWriting')}
             </button>
           </div>
+          {/* Quick model switcher */}
+          {providers.length > 0 && (
+            <select
+              className="mt-2 h-[26px] w-full px-2 bg-[var(--canvas-elevated)] border border-[var(--hairline)] rounded-[var(--radius-sm)] text-[var(--ink)] text-[12px] outline-none cursor-pointer focus:border-[var(--accent-gold)]"
+              value={activeProviderId}
+              onChange={(e) => switchProvider(e.target.value)}
+              title={t('settings.quickSwitch')}
+            >
+              {providers.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name} · {p.model}
+                </option>
+              ))}
+            </select>
+          )}
         </div>
 
         {/* Session selector */}

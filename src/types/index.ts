@@ -176,6 +176,19 @@ export interface ChatMessage {
 }
 
 // ─── Settings ───
+export interface AIProviderProfile {
+  id: string
+  name: string
+  type: 'openai' | 'openai-response' | 'claude'
+  baseUrl: string
+  apiKey: string
+  model: string
+  /** 该模型的上下文窗口 token 上限（供后续上下文预算使用） */
+  contextLimit: number
+  /** 单次请求最大生成 token 数 */
+  maxTokens: number
+}
+
 export interface AppSettings {
   apiKey: string
   apiKeyDeepseek: string
