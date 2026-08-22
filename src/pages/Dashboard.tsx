@@ -1,0 +1,599 @@
+import type { LucideIcon } from 'lucide-react'
+import {
+  ArrowRight,
+  BarChartHorizontal,
+  BookOpenText,
+  Brain,
+  Check,
+  Clover,
+  FolderOpen,
+  LayoutDashboard,
+  Library,
+  List,
+  PenLine,
+  ScrollText,
+  Swords,
+  Users,
+  Waypoints,
+} from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { useDataRefresh } from '@/hooks/useDataRefresh'
+import { useT } from '@/hooks/useT'
+import { statsApi } from '@/lib/api'
+import { useProjectName, useStats } from '@/lib/useProjectData'
+import { useProjectStore } from '@/stores/useProjectStore'
+import { useSidebarStore } from '@/stores/useSidebarStore'
+import type { ProjectStats, WorkflowPhase } from '@/types'
+
+const PHASE_ORDER: WorkflowPhase[] = ['idea', 'setting', 'outline', 'writing', 'review', 'consistency', 'export']
+
+const PHASE_LABELS: Record<WorkflowPhase, { key: string; num: string }> = {
+  idea: { key: 'phaseIdea', num: '1' },
+  setting: { key: 'phaseSetting', num: '2' },
+  outline: { key: 'phaseOutline', num: '3' },
+  writing: { key: 'phaseWriting', num: '4' },
+  review: { key: 'phaseReview', num: '5' },
+  consistency: { key: 'phaseConsistency', num: '6' },
+  export: { key: 'phaseExport', num: '7' },
+}
+
+const GENRE_LABELS: Record<string, { labelKey: string; color: string }> = {
+  'sci-fi': { labelKey: 'pages.genre.sci-fi', color: '#5b8af0' },
+  fantasy: { labelKey: 'pages.genre.fantasy', color: '#a855f7' },
+  romance: { labelKey: 'pages.genre.romance', color: '#ec4899' },
+  history: { labelKey: 'pages.genre.history', color: '#d97706' },
+  urban: { labelKey: 'pages.genre.urban', color: '#14b8a6' },
+  'power-fantasy': { labelKey: 'pages.genre.power-fantasy', color: '#f97316' },
+  biography: { labelKey: 'pages.genre.biography', color: '#6b7280' },
+  other: { labelKey: 'pages.genre.other', color: '#8b8b8b' },
+}
+
+const statusColors: Record<string, string> = {
+  accepted: 'var(--success)',
+  review: 'var(--warning)',
+  writing: 'var(--info)',
+}
+
+const statusBg: Record<string, string> = {
+  accepted: 'var(--success-soft)',
+  review: 'var(--warning-soft)',
+  writing: 'var(--info-soft)',
+}
+
+export function Dashboard() {
+  const { setActivePage } = useSidebarStore()
+  const { data: stats, loading, reload: reloadStats } = useStats()
+  useDataRefresh('stats', reloadStats)
+  const { t } = useT()
+  const project = useProjectName()
+  const workflowPhase = useProjectStore((s) => s.workflowPhase)
+  const setPhase = useProjectStore((s) => s.setPhase)
+  const loadPhase = useProjectStore((s) => s.loadPhase)
+  const [advancing, setAdvancing] = useState(false)
+  const [confirmPhase, setConfirmPhase] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (project) loadPhase(project)
+  }, [project])
+
+  const currentIdx = PHASE_ORDER.indexOf(workflowPhase)
+
+  const canAdvance = useCallback((): WorkflowPhase | null => {
+    const idx = PHASE_ORDER.indexOf(workflowPhase)
+    return PHASE_ORDER[idx + 1] || null
+  }, [workflowPhase])
+
+  const handleAdvance = async () => {
+    if (!project || advancing) return
+    setAdvancing(true)
+    try {
+      const next = canAdvance()
+      if (next) await setPhase(project, next)
+    } finally {
+      setAdvancing(false)
+    }
+  }
+
+  const handlePhaseSelect = (phase: string) => {
+    if (!project || phase === workflowPhase) return
+    setConfirmPhase(phase)
+  }
+
+  const handleConfirmPhase = async () => {
+    if (!project || !confirmPhase) return
+    await setPhase(project, confirmPhase as any)
+    setConfirmPhase(null)
+  }
+
+  // ── Target words editing ──
+  const [editingTarget, setEditingTarget] = useState(false)
+  const [targetInput, setTargetInput] = useState('')
+  const targetInputRef = useRef<HTMLInputElement>(null)
+
+  const handleSaveTargetWords = useCallback(async () => {
+    const val = parseInt(targetInput)
+    if (!isNaN(val) && val >= 1000 && project) {
+      try {
+        await statsApi.updateTargetWords(project, val)
+        reloadStats()
+      } catch {
+        /* ignore */
+      }
+    }
+    setEditingTarget(false)
+    setTargetInput('')
+  }, [targetInput, project, reloadStats])
+
+  const handleResetTargetWords = useCallback(async () => {
+    if (!project) return
+    try {
+      await statsApi.resetTargetWords(project)
+      reloadStats()
+    } catch {
+      /* ignore */
+    }
+    setEditingTarget(false)
+    setTargetInput('')
+  }, [project, reloadStats])
+
+  useEffect(() => {
+    if (editingTarget && targetInputRef.current) {
+      targetInputRef.current.focus()
+      targetInputRef.current.select()
+    }
+  }, [editingTarget])
+
+  if (loading) {
+    return <div className="flex-1 flex items-center justify-center text-[var(--ink-mute)]">{t('common.loading')}</div>
+  }
+
+  const s: ProjectStats = stats || {
+    totalWords: 0,
+    chapterCount: 0,
+    acceptedCount: 0,
+    characterCount: 0,
+    relationCount: 0,
+    foreshadowCount: 0,
+    resolvedForeshadow: 0,
+    overdueForeshadow: 0,
+    worldCount: 0,
+    sciCount: 0,
+    memoryCount: 0,
+    timelineCount: 0,
+    volumeCount: 0,
+    volumes: [],
+    clueUnresolved: 0,
+    clueResolved: 0,
+    genres: [],
+    tokenInput: 0,
+    tokenOutput: 0,
+    chapters: [],
+    dailyWords: [],
+    targetWords: 0,
+  }
+
+  const progressPct = s.chapterCount > 0 ? Math.round((s.acceptedCount / s.chapterCount) * 100) : 0
+  const wordProgressPct = s.targetWords > 0 ? Math.min((s.totalWords / s.targetWords) * 100, 100) : 0
+  const totalClues = (s.clueUnresolved || 0) + (s.clueResolved || 0)
+  const totalTokens = (s.tokenInput || 0) + (s.tokenOutput || 0)
+
+  return (
+    <>
+      <div className="page-header">
+        <h2 className="flex items-center gap-2">
+          <LayoutDashboard className="w-5 h-5" /> {t('pages.dashboard')}
+        </h2>
+        <div className="page-header-actions">
+          <button
+            className="btn-primary flex items-center gap-1.5"
+            style={{ height: 30, padding: '0 14px' }}
+            onClick={() => setActivePage('page-writing')}
+          >
+            <PenLine className="w-3.5 h-3.5" /> {t('pages.continueWriting')}
+          </button>
+        </div>
+      </div>
+
+      {/* ── Phase Bar ── */}
+      <div className="flex items-center gap-1 px-6 h-[54px] bg-[var(--canvas-soft)] border-b border-[var(--hairline)] shrink-0 overflow-x-auto custom-scrollbar">
+        {PHASE_ORDER.map((phase, i) => (
+          <span key={phase} className="inline-flex items-center">
+            <PhaseStep
+              state={i < currentIdx ? 'done' : i === currentIdx ? 'active' : 'pending'}
+              label={t(`pages.${PHASE_LABELS[phase].key}`)}
+              num={PHASE_LABELS[phase].num}
+              active={i === currentIdx}
+              onAdvance={i === currentIdx && currentIdx < PHASE_ORDER.length - 1 ? handleAdvance : undefined}
+              onSelect={i !== currentIdx ? () => handlePhaseSelect(phase) : undefined}
+              advancing={advancing}
+              advanceTitle={t('dashboard.advancePhase')}
+            />
+            {i < PHASE_ORDER.length - 1 && <PhaseConnector done={i < currentIdx} />}
+          </span>
+        ))}
+        <div className="ml-auto text-[11px] text-[var(--ink-mute)] font-mono min-w-[140px] text-right">
+          {t('dashboard.phaseSummary', { n: s.chapterCount, m: s.acceptedCount })}
+        </div>
+      </div>
+
+      {/* ── Grid ── */}
+      <div className="grid grid-cols-3 gap-3 p-6 overflow-y-auto flex-1 auto-rows-min custom-scrollbar">
+        {/* ── 写作进度 ── */}
+        <DashCard icon={BarChartHorizontal} title={t('pages.cardProgress')}>
+          <div className="font-mono text-[28px] text-[var(--accent-gold)]">
+            {s.acceptedCount} / {s.chapterCount}
+          </div>
+          <div className="h-1.5 bg-[var(--canvas-mid)] rounded-full my-3 overflow-hidden">
+            <div className="h-full bg-[var(--accent-gold)] rounded-full" style={{ width: `${progressPct}%` }} />
+          </div>
+          <div className="flex justify-between text-[12px] text-[var(--ink-tertiary)]">
+            <span>{t('dashboard.completedChapters', { n: s.acceptedCount })}</span>
+            <span>{progressPct}%</span>
+          </div>
+        </DashCard>
+
+        {/* ── 总字数 ── */}
+        <DashCard icon={BookOpenText} title={t('pages.cardTotalWords')}>
+          <div className="font-mono text-[28px] text-[var(--accent-gold)]">{s.totalWords?.toLocaleString() || '0'}</div>
+          <div className="h-1.5 bg-[var(--canvas-mid)] rounded-full my-3 overflow-hidden">
+            <div
+              className="h-full rounded-full transition-all"
+              style={{ width: `${wordProgressPct}%`, background: 'var(--info)' }}
+            />
+          </div>
+          <div className="flex justify-between text-[12px] text-[var(--ink-tertiary)]">
+            <span>{t('dashboard.targetWordsLabel')}</span>
+            <span>
+              {editingTarget ? (
+                <input
+                  ref={targetInputRef}
+                  type="number"
+                  min={1000}
+                  className="inline w-[100px] bg-[var(--canvas-card)] border border-[var(--accent-gold)] rounded px-1 py-[1px] text-[12px] font-mono text-[var(--accent-gold)] outline-none text-right"
+                  value={targetInput}
+                  onChange={(e) => setTargetInput(e.target.value)}
+                  onBlur={handleSaveTargetWords}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleSaveTargetWords()
+                    if (e.key === 'Escape') {
+                      setEditingTarget(false)
+                      setTargetInput('')
+                    }
+                  }}
+                />
+              ) : (
+                <span
+                  className="cursor-pointer hover:text-[var(--accent-gold)] transition-colors"
+                  onClick={() => {
+                    setTargetInput(String(s.targetWords))
+                    setEditingTarget(true)
+                  }}
+                  title={t('sidebar.clickToEditTarget')}
+                >
+                  {s.targetWords?.toLocaleString() || '0'}
+                </span>
+              )}
+            </span>
+            <span>{wordProgressPct.toFixed(1)}%</span>
+          </div>
+        </DashCard>
+
+        {/* ── 创作类型 ── */}
+        <DashCard icon={Library} title={t('pages.cardGenre')}>
+          <div className="flex flex-wrap gap-1.5 mt-1">
+            {(s.genres || []).length > 0 ? (
+              s.genres!.map((g) => {
+                const info = GENRE_LABELS[g] || { labelKey: 'pages.genre.other', color: '#8b8b8b' }
+                return (
+                  <span
+                    key={g}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[12px] font-medium"
+                    style={{ background: `${info.color}18`, color: info.color, border: `1px solid ${info.color}40` }}
+                  >
+                    {t(info.labelKey)}
+                  </span>
+                )
+              })
+            ) : (
+              <span className="text-[13px] text-[var(--ink-tertiary)]">{t('dashboard.notSet')}</span>
+            )}
+          </div>
+          <div className="text-[12px] text-[var(--ink-tertiary)] mt-2.5">
+            {t('dashboard.volumeChapterCount', { n: s.volumeCount || 0, m: s.chapterCount })}
+          </div>
+        </DashCard>
+
+        {/* ── 角色与关系 ── */}
+        <DashCard icon={Users} title={t('pages.cardCharRelation')}>
+          <div className="flex items-baseline gap-4 mt-1">
+            <div>
+              <div className="font-mono text-[22px] text-[var(--ink)]">{s.characterCount || 0}</div>
+              <div className="text-[11px] text-[var(--ink-tertiary)]">{t('dashboard.characters')}</div>
+            </div>
+            {(s.relationCount || 0) > 0 && (
+              <>
+                <div className="text-[var(--ink-mute)] text-[20px]">+</div>
+                <div>
+                  <div className="font-mono text-[22px] text-[var(--ink)]">{s.relationCount}</div>
+                  <div className="text-[11px] text-[var(--ink-tertiary)]">{t('dashboard.relations')}</div>
+                </div>
+              </>
+            )}
+          </div>
+        </DashCard>
+
+        {/* ── 世界观与设定 ── */}
+        <DashCard icon={FolderOpen} title={t('pages.cardWorldSetting')}>
+          <div className="flex items-baseline gap-4 mt-1">
+            <div>
+              <div className="font-mono text-[22px] text-[var(--ink)]">{s.worldCount || 0}</div>
+              <div className="text-[11px] text-[var(--ink-tertiary)]">{t('dashboard.worldbuilding')}</div>
+            </div>
+            <div>
+              <div className="font-mono text-[22px] text-[var(--ink)]">{s.sciCount || 0}</div>
+              <div className="text-[11px] text-[var(--ink-tertiary)]">{t('dashboard.scienceSettings')}</div>
+            </div>
+          </div>
+        </DashCard>
+
+        {/* ── 伏笔管理 ── */}
+        <DashCard icon={Swords} title={t('pages.cardForeshadowManage')}>
+          <div className="flex items-baseline gap-4 mt-1">
+            <div>
+              <div className="font-mono text-[22px] text-[var(--ink)]">{s.foreshadowCount || 0}</div>
+              <div className="text-[11px] text-[var(--ink-tertiary)]">{t('dashboard.totalForeshadows')}</div>
+            </div>
+            <div>
+              <div className="font-mono text-[22px] text-[var(--success)]">{s.resolvedForeshadow || 0}</div>
+              <div className="text-[11px] text-[var(--ink-tertiary)]">{t('dashboard.resolvedForeshadows')}</div>
+            </div>
+            {(s.overdueForeshadow || 0) > 0 && (
+              <div>
+                <div className="font-mono text-[22px] text-[var(--error)]">{s.overdueForeshadow}</div>
+                <div className="text-[11px] text-[var(--ink-tertiary)]">{t('dashboard.overdueForeshadows')}</div>
+              </div>
+            )}
+          </div>
+        </DashCard>
+
+        {/* ── 卷结构 ── */}
+        {(s.volumes || []).length > 0 && (
+          <DashCard icon={ScrollText} title={t('pages.cardVolumes')}>
+            <div className="space-y-1.5 mt-1">
+              {s.volumes!.map((v) => (
+                <div key={v.id} className="flex items-center justify-between text-[12px]">
+                  <span className="text-[var(--ink)] truncate mr-2">{v.title}</span>
+                  <span className="text-[var(--ink-tertiary)] shrink-0 font-mono">
+                    {t('dashboard.volumeStats', { n: v.chapter_count, m: (v.word_count || 0).toLocaleString() })}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </DashCard>
+        )}
+
+        {/* ── 线索板 ── */}
+        {totalClues > 0 && (
+          <DashCard icon={Clover} title={t('pages.cardClueBoard')}>
+            <div className="flex items-baseline gap-4 mt-1">
+              <div>
+                <div className="font-mono text-[22px] text-[var(--warning)]">{s.clueUnresolved || 0}</div>
+                <div className="text-[11px] text-[var(--ink-tertiary)]">{t('dashboard.unresolvedClues')}</div>
+              </div>
+              <div>
+                <div className="font-mono text-[22px] text-[var(--success)]">{s.clueResolved || 0}</div>
+                <div className="text-[11px] text-[var(--ink-tertiary)]">{t('dashboard.resolvedClues')}</div>
+              </div>
+            </div>
+          </DashCard>
+        )}
+
+        {/* ── 创作记忆与时间线 ── */}
+        <DashCard icon={Waypoints} title={t('pages.cardNarrative')}>
+          <div className="flex items-baseline gap-4 mt-1">
+            {(s.memoryCount || 0) > 0 && (
+              <div>
+                <div className="font-mono text-[22px] text-[var(--ink)]">{s.memoryCount}</div>
+                <div className="text-[11px] text-[var(--ink-tertiary)]">{t('dashboard.narrativeMemory')}</div>
+              </div>
+            )}
+            {(s.timelineCount || 0) > 0 && (
+              <div>
+                <div className="font-mono text-[22px] text-[var(--ink)]">{s.timelineCount}</div>
+                <div className="text-[11px] text-[var(--ink-tertiary)]">{t('dashboard.timelineEvents')}</div>
+              </div>
+            )}
+            {!s.memoryCount && !s.timelineCount && (
+              <span className="text-[13px] text-[var(--ink-tertiary)]">{t('dashboard.noRecords')}</span>
+            )}
+          </div>
+        </DashCard>
+
+        {/* ── Token 消耗 ── */}
+        {totalTokens > 0 && (
+          <DashCard icon={Brain} title={t('pages.cardAiUsage')}>
+            <div className="flex flex-wrap gap-x-3 gap-y-1 mt-1">
+              <div className="min-w-0">
+                <div className="font-mono text-[16px] text-[var(--ink)]">{fmtTokens(s.tokenInput || 0)}</div>
+                <div className="text-[11px] text-[var(--ink-tertiary)]">{t('dashboard.tokenInput')}</div>
+              </div>
+              <div className="min-w-0">
+                <div className="font-mono text-[16px] text-[var(--ink)]">{fmtTokens(s.tokenOutput || 0)}</div>
+                <div className="text-[11px] text-[var(--ink-tertiary)]">{t('dashboard.tokenOutput')}</div>
+              </div>
+              <div className="min-w-0">
+                <div className="font-mono text-[16px] text-[var(--ink)]">{fmtTokens(totalTokens)}</div>
+                <div className="text-[11px] text-[var(--ink-tertiary)]">{t('dashboard.tokenTotal')}</div>
+              </div>
+            </div>
+          </DashCard>
+        )}
+
+        {/* ── 章节列表 (全宽) ── */}
+        <div className="col-span-3 bg-[var(--canvas-card)] border border-[var(--hairline)] rounded-lg p-5">
+          <div className="dash-card-title flex items-center gap-1.5">
+            <List className="w-4 h-4" /> {t('pages.cardChapterList')}
+          </div>
+          <div>
+            {(s.chapters || []).map((ch: any) => (
+              <ChapterListItem
+                key={ch.num}
+                formattedTitle={t('dashboard.chapterFormat', { num: ch.num, title: ch.title })}
+                status={ch.status}
+                words={`${(ch.word_count || 0).toLocaleString()}${t('dashboard.wordCountSuffix')}`}
+              />
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {confirmPhase && (
+        <div
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-[200]"
+          onClick={() => setConfirmPhase(null)}
+        >
+          <div
+            className="bg-[var(--canvas-card)] border border-[var(--hairline)] rounded-xl p-6 w-[360px] shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-[16px] font-medium text-[var(--ink)] mb-2">{t('dashboard.switchPhaseTitle')}</h3>
+            <p className="text-[13px] text-[var(--ink-tertiary)] mb-5">
+              {t('dashboard.switchPhaseBody', {
+                phase: t(`pages.${PHASE_LABELS[confirmPhase as keyof typeof PHASE_LABELS]?.key}`),
+              })}
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                className="h-[32px] px-4 rounded-lg border border-[var(--hairline-light)] bg-[var(--canvas-elevated)] text-[var(--ink)] text-[13px] cursor-pointer hover:bg-[var(--canvas-mid)]"
+                onClick={() => setConfirmPhase(null)}
+              >
+                {t('common.cancel')}
+              </button>
+              <button
+                className="h-[32px] px-4 rounded-lg bg-[var(--accent-gold)] text-[var(--canvas)] text-[13px] font-medium cursor-pointer border-none hover:brightness-110"
+                onClick={handleConfirmPhase}
+              >
+                {t('dashboard.confirmSwitch')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
+
+function fmtTokens(n: number): string {
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`
+  return String(n)
+}
+
+function PhaseStep({
+  state,
+  label,
+  num,
+  active,
+  onAdvance,
+  onSelect,
+  advancing,
+  advanceTitle,
+}: {
+  state: string
+  label: string
+  num: string
+  active?: boolean
+  onAdvance?: () => void
+  onSelect?: () => void
+  advancing?: boolean
+  advanceTitle?: string
+}) {
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 text-[12px] whitespace-nowrap px-2 py-1 rounded-[var(--radius-sm)]
+      ${onSelect ? 'cursor-pointer' : ''}
+      ${state === 'active' ? 'text-[var(--ink)] font-medium' : state === 'done' ? 'text-[var(--ink-tertiary)]' : 'text-[var(--ink-mute)]'}
+      hover:bg-[var(--canvas-card)]`}
+      onClick={() => onSelect?.()}
+    >
+      <span
+        className={`w-[18px] h-[18px] rounded-full flex items-center justify-center text-[10px] shrink-0
+        ${
+          state === 'active'
+            ? 'bg-[var(--accent-gold)] text-[var(--canvas)] shadow-[0_0_0_3px_var(--accent-gold-soft-bg)]'
+            : state === 'done'
+              ? 'bg-[var(--success-soft)] text-[var(--success)]'
+              : 'bg-[var(--canvas-mid)] text-[var(--ink-mute)]'
+        }`}
+      >
+        {state === 'done' ? <Check className="w-3 h-3" /> : num}
+      </span>
+      {label}
+      {active && onAdvance && (
+        <button
+          className="ml-1 w-[18px] h-[18px] flex items-center justify-center rounded-full bg-[var(--accent-gold)] text-[var(--canvas)] hover:brightness-110 transition-all cursor-pointer border-none"
+          onClick={(e) => {
+            e.stopPropagation()
+            onAdvance()
+          }}
+          disabled={advancing}
+          title={advanceTitle}
+        >
+          <ArrowRight className="w-3 h-3" />
+        </button>
+      )}
+    </span>
+  )
+}
+
+function PhaseConnector({ done }: { done?: boolean }) {
+  return (
+    <span
+      className={`w-[18px] h-px shrink-0 ${done ? 'bg-[var(--success)] opacity-50' : 'bg-[var(--hairline-light)]'}`}
+    />
+  )
+}
+
+function DashCard({ icon: Icon, title, children }: { icon?: LucideIcon; title: string; children: React.ReactNode }) {
+  return (
+    <div className="bg-[var(--canvas-card)] border border-[var(--hairline)] rounded-lg p-5">
+      <div className="dash-card-title flex items-center gap-1.5">
+        {Icon && <Icon className="w-4 h-4" />}
+        {title}
+      </div>
+      {children}
+    </div>
+  )
+}
+
+function ChapterListItem({ formattedTitle, status, words }: { formattedTitle: string; status: string; words: string }) {
+  const { t } = useT()
+  const badgeColor = statusColors[status] || 'var(--ink-mute)'
+  const bgColor = statusBg[status] || 'var(--canvas-pop)'
+  const statusIcon: Record<string, React.ReactNode> = {
+    accepted: <Check className="w-2.5 h-2.5" />,
+    review: (
+      <span
+        style={{ width: 8, height: 8, display: 'inline-block', borderRadius: '50%', background: 'var(--warning)' }}
+      />
+    ),
+    writing: (
+      <span style={{ width: 8, height: 8, display: 'inline-block', borderRadius: '50%', background: 'var(--info)' }} />
+    ),
+  }
+  return (
+    <div className="flex items-center gap-2.5 py-1.5 border-b border-[var(--hairline)] last:border-none text-[13px]">
+      <span
+        className="text-[10px] font-medium px-[6px] py-[1px] rounded-full flex items-center gap-0.5"
+        style={{ background: bgColor, color: badgeColor }}
+      >
+        {statusIcon[status] || (
+          <span
+            style={{ width: 6, height: 6, display: 'inline-block', borderRadius: '50%', background: 'var(--ink-mute)' }}
+          />
+        )}
+      </span>
+      <span style={{ flex: 1 }}>{formattedTitle}</span>
+      <span style={{ color: 'var(--ink-tertiary)', fontSize: 12 }}>{words}</span>
+    </div>
+  )
+}
