@@ -33,3 +33,6 @@ server/sql-wasm.wasm
 
 # Dev server pid record
 .dev.pid
+
+# Iteration backups
+iteration backup/
