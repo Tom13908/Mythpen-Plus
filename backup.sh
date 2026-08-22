@@ -23,12 +23,12 @@ for f in "$BACKUP_DIR"/v*.zip; do
   esac
 done
 NEXT=$((MAX + 1))
-TARGET="$BACKUP_DIR/v$NEXT.zip"
+TARGET="$BACKUP_DIR/v${NEXT}.zip"
 
-echo "📦 创建迭代备份: $TARGET"
+echo "📦 创建迭代备份: ${TARGET}"
 zip -rq "$TARGET" . -x "$BACKUP_DIR/*" -x "node_modules/*" -x "*.DS_Store"
 
 SIZE=$(du -h "$TARGET" | cut -f1)
 FILES=$(unzip -l "$TARGET" | tail -1 | awk '{print $2}')
-echo "✅ 备份完成: v$NEXT（$FILES 个文件, $SIZE）"
+echo "✅ 备份完成: v${NEXT}，${FILES} 个文件, ${SIZE}"
 echo "   恢复方法: 解压到项目目录后运行 pnpm install"
