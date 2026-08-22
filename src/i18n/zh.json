@@ -198,7 +198,7 @@
     "done": "完成",
     "footer": "mythpen · 本地数据 · 安全高效",
     "apiType": "接口类型",
-    "apiTypeDesc": "OpenAI 格式或 Anthropic 格式",
+    "apiTypeDesc": "OpenAI（/v1/chat/completions）、OpenAI Responses（/v1/responses）或 Anthropic（/v1/messages）",
     "showKey": "显示密钥",
     "hideKey": "隐藏密钥",
     "testing": "测试中...",

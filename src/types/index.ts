@@ -183,7 +183,7 @@ export interface AppSettings {
   apiKeyOpenai: string
   apiBaseUrl: string
   apiModel: string
-  apiType: 'openai' | 'claude'
+  apiType: 'openai' | 'openai-response' | 'claude'
   uiLanguage: 'zh' | 'en'
   theme: 'dark' | 'light'
   editorFontSize: number

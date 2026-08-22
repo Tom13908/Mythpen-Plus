@@ -6,9 +6,14 @@ const Anthropic = require('@anthropic-ai/sdk');
 
 // ─── Provider detection ───
 // apiType takes priority; fallback to model name heuristic
+// Supported apiType values:
+//   'openai'          → POST {base}/chat/completions
+//   'openai-response' → POST {base}/responses       (OpenAI Responses API)
+//   'claude'/'anthropic' → POST {base}/messages     (Anthropic Messages API)
 
 function detectProvider(model, apiType) {
-  if (apiType === 'claude') return 'claude';
+  if (apiType === 'claude' || apiType === 'anthropic') return 'claude';
+  if (apiType === 'openai-response' || apiType === 'responses') return 'openai-response';
   if (apiType === 'openai') return 'openai';
   if (!model) return 'openai';
   const m = model.toLowerCase();
@@ -65,6 +70,70 @@ function toClaudeMessages(openaiMessages) {
     }
   }
   return msgs;
+}
+
+// ─── Responses API format conversion ───
+// OpenAI Responses API (/v1/responses) uses a flat item list:
+//   plain messages keep { role, content }
+//   tool calls become { type: 'function_call', call_id, name, arguments }
+//   tool results become { type: 'function_call_output', call_id, output }
+// System prompt is passed via the top-level `instructions` field.
+
+function toResponsesInput(openaiMessages) {
+  const input = [];
+  for (const msg of openaiMessages) {
+    if (msg.role === 'system') continue; // system is handled by `instructions`
+
+    if (msg.role === 'tool') {
+      input.push({
+        type: 'function_call_output',
+        call_id: msg.tool_call_id,
+        output: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
+      });
+    } else if (msg.role === 'assistant' && msg.tool_calls) {
+      if (msg.content) input.push({ role: 'assistant', content: msg.content });
+      for (const tc of msg.tool_calls) {
+        input.push({
+          type: 'function_call',
+          call_id: tc.id,
+          name: tc.function.name,
+          arguments: tc.function.arguments || '{}',
+        });
+      }
+    } else {
+      input.push({ role: msg.role, content: msg.content || '' });
+    }
+  }
+  return input;
+}
+
+function toResponsesTools(openaiTools) {
+  if (!openaiTools || openaiTools.length === 0) return undefined;
+  // Responses API tools are flat: { type: 'function', name, description, parameters }
+  return openaiTools.map(t => ({
+    type: 'function',
+    name: t.function.name,
+    description: t.function.description,
+    parameters: t.function.parameters,
+  }));
+}
+
+function fromResponsesOutput(data) {
+  const toolCalls = [];
+  let content = '';
+  for (const item of data.output || []) {
+    if (item.type === 'message') {
+      for (const block of item.content || []) {
+        if (block.type === 'output_text') content += block.text || '';
+      }
+    } else if (item.type === 'function_call') {
+      let args;
+      try { args = JSON.parse(item.arguments || '{}'); } catch { args = {}; }
+      toolCalls.push({ id: item.call_id, name: item.name, args });
+    }
+    // 'reasoning' items are ignored
+  }
+  return { content: content || null, toolCalls };
 }
 
 // ─── Unified response format ───
@@ -184,13 +253,134 @@ class OpenAIProvider {
 }
 
 // ═══════════════════════════════════════════
+// OPENAI RESPONSES PROVIDER (/v1/responses)
+// ═══════════════════════════════════════════
+
+class OpenAIResponsesProvider {
+  constructor(apiConfig) {
+    this.apiConfig = apiConfig;
+  }
+
+  async post(body) {
+    const response = await fetch(this.apiConfig.responsesUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${this.apiConfig.apiKey}` },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) {
+      const errText = await response.text();
+      throw Object.assign(new Error(`API Error: ${response.status}`), {
+        status: response.status,
+        detail: errText.slice(0, 500),
+      });
+    }
+    return response.json();
+  }
+
+  /**
+   * Non-streaming completion (supports tools).
+   * Used by the tool-call loop in /api/ai/chat/stream.
+   */
+  async complete(systemPrompt, messages, tools, temperature) {
+    const { apiConfig } = this;
+    const data = await this.post({
+      model: apiConfig.apiModel,
+      instructions: systemPrompt,
+      input: toResponsesInput(messages),
+      tools: toResponsesTools(tools),
+      temperature: temperature ?? 0.8,
+      max_output_tokens: 4096,
+      store: false,
+      stream: false,
+    });
+
+    const { content, toolCalls } = fromResponsesOutput(data);
+    const inputTokens = data.usage?.input_tokens || 0;
+    const outputTokens = data.usage?.output_tokens || 0;
+    return makeResponse(content, toolCalls, inputTokens, outputTokens);
+  }
+
+  /**
+   * Streaming completion (no tools).
+   * Used by /api/ai/continue.
+   */
+  async *stream(systemPrompt, messages, temperature) {
+    const { apiConfig } = this;
+    const response = await fetch(apiConfig.responsesUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiConfig.apiKey}` },
+      body: JSON.stringify({
+        model: apiConfig.apiModel,
+        instructions: systemPrompt,
+        input: toResponsesInput(messages),
+        temperature: temperature ?? 0.85,
+        max_output_tokens: 4096,
+        store: false,
+        stream: true,
+      }),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw Object.assign(new Error(`API Error: ${response.status}`), {
+        status: response.status,
+        detail: errText.slice(0, 500),
+      });
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const payload = line.slice(6).trim();
+        if (!payload || payload === '[DONE]') continue;
+        try {
+          const parsed = JSON.parse(payload);
+          if (parsed.type === 'response.output_text.delta' && parsed.delta) {
+            yield { type: 'chunk', text: parsed.delta };
+          } else if (parsed.type === 'response.completed') {
+            const usage = parsed.response?.usage || {};
+            yield { type: 'usage', inputTokens: usage.input_tokens || 0, outputTokens: usage.output_tokens || 0 };
+          } else if (parsed.type === 'response.failed' || parsed.type === 'response.error' || parsed.type === 'error') {
+            const err = parsed.response?.error || parsed.error || {};
+            throw Object.assign(new Error(`API Error: ${err.message || 'stream failed'}`), {
+              status: err.code,
+              detail: JSON.stringify(err).slice(0, 500),
+            });
+          }
+        } catch (e) {
+          if (e instanceof SyntaxError) continue; // skip parse errors
+          throw e;
+        }
+      }
+    }
+  }
+}
+
+// ═══════════════════════════════════════════
 // CLAUDE PROVIDER (Anthropic)
 // ═══════════════════════════════════════════
 
 class ClaudeProvider {
   constructor(apiConfig) {
     this.apiConfig = apiConfig;
-    this.client = new Anthropic({ apiKey: apiConfig.apiKey });
+    const opts = { apiKey: apiConfig.apiKey };
+    // Support relay/proxy base URLs. The Anthropic SDK appends /v1/messages
+    // to baseURL, while users enter a /v1-level base like the other providers,
+    // so strip any trailing "/v1" before handing it over.
+    if (apiConfig.apiBaseUrl) {
+      const base = apiConfig.apiBaseUrl.replace(/\/+$/, '').replace(/\/v1$/, '');
+      if (base) opts.baseURL = base;
+    }
+    this.client = new Anthropic(opts);
   }
 
   /**
@@ -274,19 +464,33 @@ function createAIAdapter(model, apiConfig, apiType) {
   const provider = detectProvider(model, apiType);
   console.log(`[AI Adapter] Using ${provider} provider for model "${model}" (apiType: ${apiType || 'auto'})`);
 
-  // Ensure chatUrl is set for OpenAI-compatible
+  // Derive endpoint URLs from the shared /v1-level base URL
   if (provider === 'openai') {
     const baseUrl = apiConfig.apiBaseUrl || 'https://api.deepseek.com/v1';
-    apiConfig.chatUrl = baseUrl.replace(/\/?$/, '') + '/chat/completions';
+    apiConfig.chatUrl = baseUrl.replace(/\/+$/, '') + '/chat/completions';
+  } else if (provider === 'openai-response') {
+    const baseUrl = apiConfig.apiBaseUrl || 'https://api.openai.com/v1';
+    apiConfig.responsesUrl = baseUrl.replace(/\/+$/, '') + '/responses';
   }
 
   switch (provider) {
     case 'claude':
       return new ClaudeProvider(apiConfig);
+    case 'openai-response':
+      return new OpenAIResponsesProvider(apiConfig);
     case 'openai':
     default:
       return new OpenAIProvider(apiConfig);
   }
 }
 
-module.exports = { createAIAdapter, OpenAIProvider, ClaudeProvider, detectProvider };
+module.exports = {
+  createAIAdapter,
+  OpenAIProvider,
+  OpenAIResponsesProvider,
+  ClaudeProvider,
+  detectProvider,
+  toResponsesInput,
+  toResponsesTools,
+  fromResponsesOutput,
+};

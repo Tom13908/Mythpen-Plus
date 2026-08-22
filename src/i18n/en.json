@@ -198,7 +198,7 @@
     "done": "Done",
     "footer": "mythpen · Local-first · Safe & efficient",
     "apiType": "API Type",
-    "apiTypeDesc": "OpenAI compatible or Anthropic format",
+    "apiTypeDesc": "OpenAI (/v1/chat/completions), OpenAI Responses (/v1/responses) or Anthropic (/v1/messages)",
     "showKey": "Show Key",
     "hideKey": "Hide Key",
     "testing": "Testing...",

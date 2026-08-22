@@ -60,6 +60,7 @@ export function SettingsDrawer() {
           apiKey: settings.apiKey,
           apiBaseUrl: settings.apiBaseUrl,
           apiModel: settings.apiModel,
+          apiType: settings.apiType,
         }),
       })
       const ms = Date.now() - start
@@ -265,11 +266,12 @@ export function SettingsDrawer() {
             </div>
             <SettingRow label={t('settings.apiType')} desc={t('settings.apiTypeDesc')}>
               <select
-                className="h-[30px] px-2.5 bg-[var(--canvas-elevated)] border border-[var(--hairline)] rounded-[var(--radius-sm)] text-[var(--ink)] text-[13px] outline-none cursor-pointer focus:border-[var(--accent-gold)] w-[120px]"
+                className="h-[30px] px-2.5 bg-[var(--canvas-elevated)] border border-[var(--hairline)] rounded-[var(--radius-sm)] text-[var(--ink)] text-[13px] outline-none cursor-pointer focus:border-[var(--accent-gold)] w-[150px]"
                 value={settings.apiType}
-                onChange={(e) => updateSetting('apiType', e.target.value as 'openai' | 'claude')}
+                onChange={(e) => updateSetting('apiType', e.target.value as 'openai' | 'openai-response' | 'claude')}
               >
                 <option value="openai">OpenAI</option>
+                <option value="openai-response">OpenAI Responses</option>
                 <option value="claude">Anthropic</option>
               </select>
             </SettingRow>

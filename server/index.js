@@ -86,6 +86,9 @@ app.post('/api/ai/chat', async (req, res) => {
     if (req.body.apiModel !== undefined) {
       aiConfig.apiModel = req.body.apiModel;
     }
+    if (req.body.apiType !== undefined) {
+      aiConfig.apiType = req.body.apiType;
+    }
     const adapter = createAIAdapter(aiConfig.apiModel, aiConfig, aiConfig.apiType);
     const systemPrompt = buildWritingPrompt(project);
 
