@@ -391,7 +391,13 @@ function closeProjectDb(filePath) {
 }
 
 function getProjectDb(name) {
-  return openProjectDb(getProjectDbPath(name));
+  const filePath = getProjectDbPath(name);
+  // 已删除的项目：拒绝静默重建空库（否则前端轮询会让文件复活，
+  // 导致同名项目无法创建）。创建项目的路径走 openProjectDb。
+  if (!fs.existsSync(filePath)) {
+    throw new Error(`PROJECT_NOT_FOUND: ${name}`);
+  }
+  return openProjectDb(filePath);
 }
 
 // ═══════════════════════════════════════════════════════════════

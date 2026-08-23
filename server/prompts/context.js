@@ -22,6 +22,11 @@ const PHASE_LABELS = {
 };
 
 function buildProjectContext(projectName) {
+  if (!projectName) {
+    // 无项目上下文（如设置里的连接测试）——绝不能去开库，
+    // 否则会凭空创建 "undefined.mythpen.db"
+    return '项目:（未指定项目，无项目上下文）';
+  }
   try {
     const pdb = db.getProjectDb(projectName);
     const meta = {};

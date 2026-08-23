@@ -104,7 +104,7 @@ router.delete('/projects/:name', (req, res) => {
   const { name } = req.params;
   const filePath = db.getProjectDbPath(name);
   db.closeProjectDb(filePath);
-  try { require('fs').unlinkSync(filePath); } catch(e) {}
+  try { require('fs').unlinkSync(filePath); } catch(e) { console.warn(`[Projects] 删除文件失败 ${filePath}:`, e.message); }
   db.dbExecute('DELETE FROM recent_projects WHERE name = ?', [name]);
   res.json({ success: true });
 });
