@@ -3,12 +3,6 @@ import { useT } from '@/hooks/useT'
 import { useProjectStore } from '@/stores/useProjectStore'
 import { useUIStore } from '@/stores/useUIStore'
 
-const MODES = [
-  { key: 'short-story', labelKey: 'project.shortStory' },
-  { key: 'medium-novel', labelKey: 'project.mediumNovel' },
-  { key: 'long-novel', labelKey: 'project.longNovel' },
-] as const
-
 const LANGUAGES = [
   { key: 'zh', labelKey: 'project.chinese' },
   { key: 'en', labelKey: 'project.english' },
@@ -20,7 +14,6 @@ export function NewProjectDialog() {
   const { t } = useT()
   const [name, setName] = useState('未曾设想的道路')
   const [styleInput, setStyleInput] = useState('')
-  const [mode, setMode] = useState('medium-novel')
   const [language, setLanguage] = useState('zh')
 
   // Clear stale error when dialog opens
@@ -47,7 +40,7 @@ export function NewProjectDialog() {
   const handleCreate = async () => {
     if (!name.trim()) return
     try {
-      await createProject(name.trim(), { mode, language, genres: parseStyleKeywords(styleInput) })
+      await createProject(name.trim(), { mode: 'medium-novel', language, genres: parseStyleKeywords(styleInput) })
       setProjectDialogOpen(false)
     } catch {
       // error is already set in store → displayed in UI
@@ -103,19 +96,6 @@ export function NewProjectDialog() {
             onChange={(e) => setStyleInput(e.target.value)}
           />
           <p className="text-[12px] text-[var(--ink-tertiary)] mt-1.5">{t('project.styleHint')}</p>
-        </div>
-
-        <div className="mb-5">
-          <label className="block text-[11px] font-medium text-[var(--ink-secondary)] tracking-[0.04em] uppercase mb-1.5">
-            {t('project.modeLabel')}
-          </label>
-          <div className="flex gap-2">
-            {MODES.map((m) => (
-              <button key={m.key} className={mode === m.key ? activeBtn : inactiveBtn} onClick={() => setMode(m.key)}>
-                {t(m.labelKey)}
-              </button>
-            ))}
-          </div>
         </div>
 
         <div className="mb-5">

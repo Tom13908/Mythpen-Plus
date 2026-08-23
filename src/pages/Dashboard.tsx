@@ -136,6 +136,21 @@ export function Dashboard() {
     setTargetInput('')
   }, [project, reloadStats])
 
+  const handlePresetTarget = useCallback(
+    async (val: number) => {
+      if (!project) return
+      try {
+        await statsApi.updateTargetWords(project, val)
+        reloadStats()
+      } catch {
+        /* ignore */
+      }
+      setEditingTarget(false)
+      setTargetInput('')
+    },
+    [project, reloadStats],
+  )
+
   useEffect(() => {
     if (editingTarget && targetInputRef.current) {
       targetInputRef.current.focus()
@@ -276,6 +291,25 @@ export function Dashboard() {
             </span>
             <span>{wordProgressPct.toFixed(1)}%</span>
           </div>
+          {editingTarget && (
+            <div className="flex flex-wrap items-center gap-1 mt-2">
+              {[50000, 100000, 200000, 500000].map((n) => (
+                <button
+                  key={n}
+                  className="px-2 py-[2px] rounded-full border border-[var(--hairline)] bg-[var(--canvas-elevated)] text-[11px] text-[var(--ink-secondary)] cursor-pointer hover:border-[var(--accent-gold)] hover:text-[var(--accent-gold)] transition-colors"
+                  onClick={() => handlePresetTarget(n)}
+                >
+                  {t('dashboard.targetPreset', { n: n / 10000 })}
+                </button>
+              ))}
+              <button
+                className="px-2 py-[2px] rounded-full border-none bg-none text-[11px] text-[var(--ink-mute)] cursor-pointer hover:text-[var(--ink)] transition-colors"
+                onClick={handleResetTargetWords}
+              >
+                {t('dashboard.targetReset')}
+              </button>
+            </div>
+          )}
         </DashCard>
 
         {/* ── 创作类型 ── */}
@@ -290,7 +324,7 @@ export function Dashboard() {
                     className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[12px] font-medium"
                     style={{ background: `${info.color}18`, color: info.color, border: `1px solid ${info.color}40` }}
                   >
-                    {t(info.labelKey)}
+                    {GENRE_LABELS[g] ? t(info.labelKey) : g}
                   </span>
                 )
               })

@@ -374,6 +374,8 @@
     "completedChapters": "已完成 {n} 章",
     "targetWords": "目标 {n} 字",
     "targetWordsLabel": "目标字数",
+    "targetPreset": "{n}万",
+    "targetReset": "恢复默认",
     "notSet": "未设定",
     "volumeChapterCount": "共 {n} 卷 · {m} 章",
     "characters": "角色",

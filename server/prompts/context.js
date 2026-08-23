@@ -32,14 +32,22 @@ function buildProjectContext(projectName) {
     const foreshadows = pdb.prepare("SELECT * FROM foreshadows WHERE status IN ('planted','progressing')").all();
 
     const genreStr = genres.map(g => GENRE_LABELS[g] || g).join('、') || '未设定';
-    const modeStr = MODE_LABELS[meta.mode] || meta.mode || '中篇';
+    // 篇幅提示：用户设定过目标字数则按目标推算档位，否则回退到模式默认
+    const customTarget = parseInt(meta.target_words, 10) || 0;
+    let modeStr;
+    if (customTarget > 0) {
+      const label = customTarget < 50000 ? '短篇' : customTarget < 150000 ? '中篇' : '长篇';
+      modeStr = `${label}（目标约${Math.round(customTarget / 10000)}万字）`;
+    } else {
+      modeStr = MODE_LABELS[meta.mode] || meta.mode || '中篇';
+    }
     const langStr = meta.language === 'en' ? 'English' : '中文';
     const phaseStr = PHASE_LABELS[meta.workflow_phase] || meta.workflow_phase || '选题';
 
     return `
 项目: ${meta.name || projectName}
 创作类型: ${genreStr}
-篇幅模式: ${modeStr}
+篇幅目标: ${modeStr}
 写作语言: ${langStr}
 当前阶段: ${phaseStr}
 当前总字数: ${meta.word_count || '0'}

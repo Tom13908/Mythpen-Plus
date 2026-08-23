@@ -374,6 +374,8 @@
     "completedChapters": "{n} chapters completed",
     "targetWords": "Target: {n} words",
     "targetWordsLabel": "Target",
+    "targetPreset": "{n}0k",
+    "targetReset": "Reset",
     "notSet": "Not set",
     "volumeChapterCount": "{n} volumes · {m} chapters",
     "characters": "Characters",
