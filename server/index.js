@@ -291,10 +291,18 @@ app.post('/api/ai/chat/stream', async (req, res) => {
       try {
         result = await adapter.complete(systemPrompt, conversation, TOOLS, temperature);
       } catch (err) {
-        if (err.status) {
-          res.write(`event: error\ndata: ${JSON.stringify({ error: `API Error: ${err.status}`, detail: err.detail })}\n\n`);
+        console.error('[AI Stream] 上游请求失败:', err.status || '', err.detail || err.message || err);
+        const detail = err.detail || err.message || '';
+        if (err.status === 400) {
+          // 400 常见原因是端点类型/地址/模型三者错配（如 claude 格式打 deepseek 端点）
+          const hint = detail.includes('model') || /not.*found|invalid|unknown/i.test(detail)
+            ? '（模型名或端点类型与所选服务不匹配，请检查设置里的接口类型/地址/模型是否一致）'
+            : '';
+          res.write(`event: error\ndata: ${JSON.stringify({ error: `API Error: ${err.status}${hint}`, detail })}\n\n`);
+        } else if (err.status) {
+          res.write(`event: error\ndata: ${JSON.stringify({ error: `API Error: ${err.status}`, detail })}\n\n`);
         } else {
-          res.write(`event: error\ndata: ${JSON.stringify({ error: err.message })}\n\n`);
+          res.write(`event: error\ndata: ${JSON.stringify({ error: err.message, detail })}\n\n`);
         }
         res.end();
         return;

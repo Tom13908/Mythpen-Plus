@@ -4,6 +4,7 @@ import {
   MessageSquare,
   Pencil,
   Plus,
+  RotateCcw,
   SendHorizonal,
   ShieldCheck,
   Sparkles,
@@ -244,9 +245,25 @@ export function AIPanel() {
     if (!project || runningRef.current || !input.trim()) return
     if (loading) return // wait for messages to finish loading
     if (!currentSessionId) return // wait for session to be created
-    runningRef.current = true
     const userMsg = input.trim()
     const isChat = mode === 'collab'
+    runCompletion(userMsg, isChat, messages)
+  }
+
+  // 重试某条用户消息：截断该消息及之后的所有消息，重新发送其内容
+  const handleRetry = (msg: any) => {
+    if (!project || runningRef.current) return
+    const idx = messages.findIndex((m) => m.id === msg.id)
+    if (idx < 0) return
+    const keep = messages.slice(0, idx) // 不含该消息及之后
+    const toDelete = messages.slice(idx)
+    toDelete.forEach((m) => chatApi.deleteMessage(project, m.id).catch(() => {}))
+    useAgentStore.setState({ messages: keep })
+    runCompletion(msg.content, mode === 'collab', keep)
+  }
+
+  const runCompletion = (userMsg: string, isChat: boolean, priorMessages: any[]) => {
+    runningRef.current = true
     setTaskName(isChat ? t('ai.taskCollab') : t('ai.taskContinue'))
     setTask({ status: 'running' })
     setStreamText('')
@@ -263,7 +280,7 @@ export function AIPanel() {
     const ch = currentChapter
 
     // Build chat history from stored messages.
-    const chatHistory: any[] = messages.map((msg) => ({
+    const chatHistory: any[] = priorMessages.map((msg) => ({
       role: msg.role === 'ai' ? 'assistant' : (msg.role as 'user' | 'system'),
       content: msg.content,
     }))
@@ -319,7 +336,11 @@ export function AIPanel() {
       (err: any) => {
         setTask({ status: 'error' })
         if (!isChat) showToast(t('ai.chatError'), 'error')
-        const errMsg = { role: 'ai' as const, content: t('ai.errorPrefix', { msg: err.error || err }) }
+        const detail = typeof err === 'object' && err.detail ? `\n\n${err.detail}` : ''
+        const errMsg = {
+          role: 'ai' as const,
+          content: t('ai.errorPrefix', { msg: (err.error || err.message || err) + detail }),
+        }
         addMessage({ id: nextMsgId(), ...errMsg })
         saveMsg(errMsg).catch(() => {})
         done()
@@ -553,9 +574,18 @@ export function AIPanel() {
                   ) : (
                     <>
                       <MarkdownContent content={msg.content} />
-                      <div className="absolute top-1.5 right-1.5 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <div className="flex gap-0.5 opacity-60 hover:opacity-100 transition-opacity mt-1.5 pt-1.5 border-t border-[var(--hairline)]">
                         <button
-                          className="w-5 h-5 flex items-center justify-center rounded border-none bg-transparent text-[var(--ink-mute)] hover:text-[var(--ink)] cursor-pointer"
+                          className="h-[22px] px-2 flex items-center gap-1 rounded border-none bg-transparent text-[var(--ink-mute)] hover:text-[var(--ink)] hover:bg-[var(--canvas-card)] cursor-pointer text-[11px]"
+                          onClick={() => handleRetry(msg)}
+                          disabled={isRunning}
+                          title={t('ai.retryMessage')}
+                        >
+                          <RotateCcw className="w-3 h-3" />
+                          {t('ai.retry')}
+                        </button>
+                        <button
+                          className="h-[22px] px-2 flex items-center gap-1 rounded border-none bg-transparent text-[var(--ink-mute)] hover:text-[var(--ink)] hover:bg-[var(--canvas-card)] cursor-pointer text-[11px]"
                           onClick={() => {
                             setEditingMsgId(msg.id)
                             setEditDraft(msg.content)
@@ -563,13 +593,15 @@ export function AIPanel() {
                           title={t('ai.editMessage')}
                         >
                           <Pencil className="w-3 h-3" />
+                          {t('ai.edit')}
                         </button>
                         <button
-                          className="w-5 h-5 flex items-center justify-center rounded border-none bg-transparent text-[var(--ink-mute)] opacity-50 hover:opacity-100 hover:text-[var(--error)] cursor-pointer transition-opacity"
+                          className="h-[22px] px-2 flex items-center gap-1 rounded border-none bg-transparent text-[var(--ink-mute)] hover:text-[var(--error)] hover:bg-[var(--canvas-card)] cursor-pointer text-[11px]"
                           onClick={() => handleDeleteMessage(msg.id)}
                           title={t('ai.deleteMessage')}
                         >
                           <Trash2 className="w-3 h-3" />
+                          {t('ai.delete')}
                         </button>
                       </div>
                     </>
