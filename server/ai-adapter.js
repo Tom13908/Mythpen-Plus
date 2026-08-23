@@ -180,7 +180,15 @@ class OpenAIProvider {
       });
     }
 
-    const data = await response.json();
+    let data;
+    try {
+      data = await response.json();
+    } catch {
+      throw Object.assign(new Error('上游返回了非 JSON 内容（疑似接口地址缺少 /v1 版本路径，命中了中转站网页）'), {
+        status: 502,
+        detail: '上游响应不是 JSON，请检查「接口地址」是否填到了 /v1 版本路径（例如 https://xxx.com/v1）',
+      });
+    }
     const choice = data.choices?.[0];
     const msg = choice?.message;
     const inputTokens = data.usage?.prompt_tokens || 0;
@@ -274,7 +282,14 @@ class OpenAIResponsesProvider {
         detail: errText.slice(0, 500),
       });
     }
-    return response.json();
+    try {
+      return await response.json();
+    } catch {
+      throw Object.assign(new Error('上游返回了非 JSON 内容（疑似接口地址缺少 /v1 版本路径，命中了中转站网页）'), {
+        status: 502,
+        detail: '上游响应不是 JSON，请检查「接口地址」是否填到了 /v1 版本路径（例如 https://xxx.com/v1）',
+      });
+    }
   }
 
   /**
@@ -460,17 +475,27 @@ class ClaudeProvider {
 // FACTORY
 // ═══════════════════════════════════════════
 
+// ─── 版本路径规范化 ───
+// OpenAI 兼容 API 的端点几乎都挂在 /v1 下（/v1/chat/completions、
+// /v1/responses）。用户常把 baseUrl 填成根地址（缺 /v1），请求就会
+// 打到中转站首页返回 HTML。这里在末尾没有 /vN 版本号时自动补 /v1。
+function withVersionPath(baseUrl) {
+  let b = String(baseUrl || '').replace(/\/+$/, '');
+  if (!/\/v\d+$/.test(b)) b += '/v1';
+  return b;
+}
+
 function createAIAdapter(model, apiConfig, apiType) {
   const provider = detectProvider(model, apiType);
   console.log(`[AI Adapter] Using ${provider} provider for model "${model}" (apiType: ${apiType || 'auto'})`);
 
   // Derive endpoint URLs from the shared /v1-level base URL
   if (provider === 'openai') {
-    const baseUrl = apiConfig.apiBaseUrl || 'https://api.deepseek.com/v1';
-    apiConfig.chatUrl = baseUrl.replace(/\/+$/, '') + '/chat/completions';
+    const baseUrl = withVersionPath(apiConfig.apiBaseUrl || 'https://api.deepseek.com/v1');
+    apiConfig.chatUrl = baseUrl + '/chat/completions';
   } else if (provider === 'openai-response') {
-    const baseUrl = apiConfig.apiBaseUrl || 'https://api.openai.com/v1';
-    apiConfig.responsesUrl = baseUrl.replace(/\/+$/, '') + '/responses';
+    const baseUrl = withVersionPath(apiConfig.apiBaseUrl || 'https://api.openai.com/v1');
+    apiConfig.responsesUrl = baseUrl + '/responses';
   }
 
   switch (provider) {
