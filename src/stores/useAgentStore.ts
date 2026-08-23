@@ -11,6 +11,7 @@ interface AgentState {
   loading: boolean
   setTask: (task: Partial<AgentTask>) => void
   addMessage: (msg: ChatMessage) => void
+  replaceMessageId: (tempId: string, realId: string) => void
   updateMessage: (project: string, messageId: string, content: string) => void
   deleteMessage: (project: string, messageId: string) => void
   loadMessages: (project: string) => Promise<void>
@@ -37,6 +38,10 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         task.status === 'running' ? true : task.status === 'completed' || task.status === 'error' ? false : s.isRunning,
     })),
   addMessage: (msg) => set((s) => ({ messages: [...s.messages, msg] })),
+
+  // 后端保存返回真实 UUID 后，把前端临时 id 替换掉，保证后续编辑/删除能命中后端
+  replaceMessageId: (tempId, realId) =>
+    set((s) => ({ messages: s.messages.map((m) => (m.id === tempId ? { ...m, id: realId } : m)) })),
 
   updateMessage: (project, messageId, content) => {
     set((s) => ({ messages: s.messages.map((m) => (m.id === messageId ? { ...m, content } : m)) }))

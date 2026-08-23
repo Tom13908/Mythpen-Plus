@@ -35,7 +35,6 @@ export function AIPanel() {
     setTask,
     addMessage,
     updateMessage,
-    deleteMessage,
     loadSessions,
     createSession,
     switchSession,
@@ -83,8 +82,13 @@ export function AIPanel() {
 
   const handleDeleteMessage = (msgId: string) => {
     if (!project) return
+    const idx = messages.findIndex((m) => m.id === msgId)
+    if (idx < 0) return
     if (!window.confirm(t('ai.deleteMessageConfirm'))) return
-    deleteMessage(project, msgId)
+    // 级联删除该消息及其后的所有消息（AI 回复/报错是跟随用户消息生成的）
+    const toDelete = messages.slice(idx)
+    useAgentStore.setState({ messages: messages.slice(0, idx) })
+    toDelete.forEach((m) => chatApi.deleteMessage(project, m.id).catch(() => {}))
   }
 
   // Resize handle drag logic
@@ -150,15 +154,26 @@ export function AIPanel() {
   // Unique message ID generator
   const nextMsgId = () => `${Date.now()}-${++msgIdCounter.current}`
 
-  // Helper: save message scoped to current session
-  const saveMsg = (data: { role: 'user' | 'ai' | 'system'; content: string }) => {
+  // Helper: save message scoped to current session, then sync backend UUID id
+  const saveMsg = (data: { role: string; content: string; toolCalls?: any }, tempId?: string) => {
     if (!currentSessionId) {
       console.warn('[AIPanel] No session to save message to')
       return Promise.resolve()
     }
     return chatApi
       .save(project!, { ...data, session_id: currentSessionId })
+      .then((saved: any) => {
+        if (saved?.id && tempId) useAgentStore.getState().replaceMessageId(tempId, saved.id)
+        return saved
+      })
       .catch((e) => console.warn('[AIPanel] Failed to save message:', e))
+  }
+
+  // Add message locally (optimistic) then persist; temp id replaced by backend UUID
+  const addAndSave = (data: { role: string; content: string; toolCalls?: any }) => {
+    const tempId = nextMsgId()
+    addMessage({ id: tempId, ...data })
+    saveMsg(data, tempId).catch(() => {})
   }
 
   // Auto-scroll to bottom when messages or stream text changes
@@ -270,8 +285,7 @@ export function AIPanel() {
     setGenTokens(0)
     streamRef.current = ''
 
-    addMessage({ id: nextMsgId(), role: 'user', content: userMsg })
-    saveMsg({ role: 'user', content: userMsg }).catch(() => {})
+    addAndSave({ role: 'user', content: userMsg })
     setInput('')
     // Force DOM clear — React 19 batch 处理后 onInput 事件可能恢复旧值
     const el = document.getElementById('ai-chat-input') as HTMLTextAreaElement | null
@@ -308,8 +322,7 @@ export function AIPanel() {
           content: fullText || defaultMsg,
           toolCalls: toolCallsRef.current.length > 0 ? toolCallsRef.current : undefined,
         }
-        addMessage({ id: nextMsgId(), ...aiMsg })
-        saveMsg(aiMsg).catch(() => {})
+        addAndSave(aiMsg)
         const hadToolCalls = toolCallsRef.current.length > 0
         done()
         if (fullText) {
@@ -341,8 +354,7 @@ export function AIPanel() {
           role: 'ai' as const,
           content: t('ai.errorPrefix', { msg: (err.error || err.message || err) + detail }),
         }
-        addMessage({ id: nextMsgId(), ...errMsg })
-        saveMsg(errMsg).catch(() => {})
+        addAndSave(errMsg)
         done()
       },
       mode,
