@@ -36,3 +36,6 @@ server/sql-wasm.wasm
 
 # Iteration backups
 iteration backup/
+
+# Backup script marker (records git sha at last backup)
+.backup-last-sha
