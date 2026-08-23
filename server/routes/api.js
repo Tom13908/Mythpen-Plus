@@ -925,6 +925,24 @@ router.delete('/:project/chat/sessions/:id', (req, res) => {
 // CHAT MESSAGES (per-project)
 // ═══════════════════════════════════════════
 
+router.put('/:project/chat/messages/:id', (req, res) => {
+  const { content } = req.body || {};
+  if (!content || !String(content).trim()) {
+    return res.status(400).json({ error: { code: 'INVALID_PARAMS', message: 'content is required', recoverable: true } });
+  }
+  const changes = db.projectExecute(project(req.params.project),
+    'UPDATE chat_messages SET content = ? WHERE id = ?', [String(content), req.params.id]);
+  if (changes === 0) return res.status(404).json({ error: { message: '消息不存在' } });
+  res.json({ success: true });
+});
+
+router.delete('/:project/chat/messages/:id', (req, res) => {
+  const changes = db.projectExecute(project(req.params.project),
+    'DELETE FROM chat_messages WHERE id = ?', [req.params.id]);
+  if (changes === 0) return res.status(404).json({ error: { message: '消息不存在' } });
+  res.json({ success: true });
+});
+
 router.get('/:project/chat/messages', (req, res) => {
   const { session_id } = req.query;
   let sql = 'SELECT * FROM chat_messages';

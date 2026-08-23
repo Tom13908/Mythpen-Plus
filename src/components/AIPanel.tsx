@@ -1,4 +1,15 @@
-import { Lightbulb, Loader, MessageSquare, Plus, SendHorizonal, ShieldCheck, Sparkles, X } from 'lucide-react'
+import {
+  Lightbulb,
+  Loader,
+  MessageSquare,
+  Pencil,
+  Plus,
+  SendHorizonal,
+  ShieldCheck,
+  Sparkles,
+  Trash2,
+  X,
+} from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { MarkdownContent } from '@/components/MarkdownContent'
 import { ToastContainer } from '@/components/ToastContainer'
@@ -22,6 +33,8 @@ export function AIPanel() {
     currentSessionId,
     setTask,
     addMessage,
+    updateMessage,
+    deleteMessage,
     loadSessions,
     createSession,
     switchSession,
@@ -50,6 +63,8 @@ export function AIPanel() {
   const [toolCalls, setToolCalls] = useState<any[]>([])
   const toolCallsRef = useRef<any[]>([])
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [editingMsgId, setEditingMsgId] = useState<string | null>(null)
+  const [editDraft, setEditDraft] = useState('')
   const { toasts, show: showToast } = useToast()
   const { t } = useT()
   const { providers, activeProviderId, providersLoaded, loadProviders, switchProvider } = useSettingsStore()
@@ -57,6 +72,19 @@ export function AIPanel() {
   useEffect(() => {
     if (!providersLoaded) loadProviders()
   }, [providersLoaded, loadProviders])
+
+  // ── 用户消息编辑/删除 ──
+  const handleSaveEdit = (msgId: string) => {
+    if (project && editDraft.trim()) updateMessage(project, msgId, editDraft.trim())
+    setEditingMsgId(null)
+    setEditDraft('')
+  }
+
+  const handleDeleteMessage = (msgId: string) => {
+    if (!project) return
+    if (!window.confirm(t('ai.deleteMessageConfirm'))) return
+    deleteMessage(project, msgId)
+  }
 
   // Resize handle drag logic
   const handleResizeMouseDown = useCallback(
@@ -488,8 +516,64 @@ export function AIPanel() {
           {messages.map((msg) => (
             <div key={msg.id}>
               {msg.role === 'user' && (
-                <div className="p-2.5 rounded-lg text-[13px] leading-[1.6] mb-2 bg-[var(--canvas-elevated)] text-[var(--ink)]">
-                  <MarkdownContent content={msg.content} />
+                <div className="group relative p-2.5 rounded-lg text-[13px] leading-[1.6] mb-2 bg-[var(--canvas-elevated)] text-[var(--ink)]">
+                  {editingMsgId === msg.id ? (
+                    <div className="flex flex-col gap-1.5">
+                      <textarea
+                        className="w-full min-h-[60px] bg-[var(--canvas-card)] border border-[var(--accent-gold)] rounded p-1.5 text-[13px] leading-[1.6] text-[var(--ink)] outline-none resize-y custom-scrollbar"
+                        value={editDraft}
+                        onChange={(e) => setEditDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleSaveEdit(msg.id)
+                          if (e.key === 'Escape') {
+                            setEditingMsgId(null)
+                            setEditDraft('')
+                          }
+                        }}
+                        autoFocus
+                      />
+                      <div className="flex gap-1.5 justify-end">
+                        <button
+                          className="px-2.5 h-[24px] rounded border border-[var(--hairline)] bg-[var(--canvas-card)] text-[12px] text-[var(--ink-secondary)] cursor-pointer hover:bg-[var(--canvas-mid)]"
+                          onClick={() => {
+                            setEditingMsgId(null)
+                            setEditDraft('')
+                          }}
+                        >
+                          {t('common.cancel')}
+                        </button>
+                        <button
+                          className="px-2.5 h-[24px] rounded border-none bg-[var(--accent-gold)] text-[12px] text-[var(--canvas)] font-medium cursor-pointer hover:bg-[var(--accent-gold-soft)]"
+                          onClick={() => handleSaveEdit(msg.id)}
+                        >
+                          {t('common.save')}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <MarkdownContent content={msg.content} />
+                      <div className="absolute top-1.5 right-1.5 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button
+                          className="w-5 h-5 flex items-center justify-center rounded border-none bg-transparent text-[var(--ink-mute)] hover:text-[var(--ink)] cursor-pointer"
+                          onClick={() => {
+                            setEditingMsgId(msg.id)
+                            setEditDraft(msg.content)
+                          }}
+                          title={t('ai.editMessage')}
+                        >
+                          <Pencil className="w-3 h-3" />
+                        </button>
+                        <button
+                          className="w-5 h-5 flex items-center justify-center rounded border-none bg-transparent text-[var(--ink-mute)] opacity-50 hover:opacity-100 hover:text-[var(--error)] cursor-pointer transition-opacity"
+                          onClick={() => handleDeleteMessage(msg.id)}
+                          title={t('ai.deleteMessage')}
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
               {msg.role === 'ai' && msg.content && (

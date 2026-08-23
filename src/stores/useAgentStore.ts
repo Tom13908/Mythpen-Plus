@@ -11,6 +11,8 @@ interface AgentState {
   loading: boolean
   setTask: (task: Partial<AgentTask>) => void
   addMessage: (msg: ChatMessage) => void
+  updateMessage: (project: string, messageId: string, content: string) => void
+  deleteMessage: (project: string, messageId: string) => void
   loadMessages: (project: string) => Promise<void>
   loadSessions: (project: string) => Promise<void>
   createSession: (project: string, title?: string) => Promise<string>
@@ -35,6 +37,16 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         task.status === 'running' ? true : task.status === 'completed' || task.status === 'error' ? false : s.isRunning,
     })),
   addMessage: (msg) => set((s) => ({ messages: [...s.messages, msg] })),
+
+  updateMessage: (project, messageId, content) => {
+    set((s) => ({ messages: s.messages.map((m) => (m.id === messageId ? { ...m, content } : m)) }))
+    chatApi.updateMessage(project, messageId, content).catch(() => {})
+  },
+
+  deleteMessage: (project, messageId) => {
+    set((s) => ({ messages: s.messages.filter((m) => m.id !== messageId) }))
+    chatApi.deleteMessage(project, messageId).catch(() => {})
+  },
 
   loadMessages: async (project) => {
     if (!project) return

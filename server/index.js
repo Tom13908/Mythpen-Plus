@@ -182,7 +182,16 @@ app.post('/api/ai/models', async (req, res) => {
         continue;
       }
       if (response.ok) {
-        const data = await response.json();
+        const text = await response.text();
+        let data;
+        try {
+          data = JSON.parse(text);
+        } catch {
+          // 200 但返回了 HTML/网页——该路径不是 API，继续尝试下一个候选
+          lastStatus = response.status;
+          lastText = '响应不是 JSON（可能命中了中转站的网页而非 API 路径）';
+          continue;
+        }
         const list = Array.isArray(data) ? data : data.data || [];
         const models = list.map((m) => m.id).filter(Boolean).sort();
         return res.json({ models });

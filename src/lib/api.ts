@@ -303,6 +303,13 @@ export const chatApi = {
     request(`/${encodeURIComponent(project)}/chat/sessions/${sessionId}`, { method: 'DELETE' }),
   updateSession: (project: string, sessionId: string, title: string) =>
     request(`/${encodeURIComponent(project)}/chat/sessions/${sessionId}`, { method: 'PUT', body: { title } }),
+  updateMessage: (project: string, messageId: string, content: string) =>
+    request(`/${encodeURIComponent(project)}/chat/messages/${messageId}`, {
+      method: 'PUT',
+      body: { content },
+    }),
+  deleteMessage: (project: string, messageId: string) =>
+    request(`/${encodeURIComponent(project)}/chat/messages/${messageId}`, { method: 'DELETE' }),
   list: (project: string, sessionId?: string) => {
     const qs = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ''
     return request(`/${encodeURIComponent(project)}/chat/messages${qs}`)
