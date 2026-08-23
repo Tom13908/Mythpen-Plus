@@ -382,17 +382,11 @@ export function SettingsDrawer() {
                   <div className="flex gap-1 items-center">
                     <input
                       type="text"
-                      list="ai-model-options"
                       className="h-[30px] px-2 bg-[var(--canvas-elevated)] border border-[var(--hairline)] rounded-[var(--radius-sm)] text-[var(--ink)] text-[12px] font-mono outline-none focus:border-[var(--accent-gold)] w-[160px]"
                       value={active.model}
                       onChange={(e) => updateProvider(active.id, { model: e.target.value })}
                       placeholder="deepseek-v4-flash"
                     />
-                    <datalist id="ai-model-options">
-                      {modelList.map((m) => (
-                        <option key={m} value={m} />
-                      ))}
-                    </datalist>
                     <button
                       className="h-[30px] px-2 rounded-[var(--radius-sm)] border border-[var(--hairline)] bg-[var(--canvas-elevated)] text-[var(--ink-secondary)] text-[12px] cursor-pointer hover:bg-[var(--canvas-mid)] disabled:opacity-50 shrink-0 whitespace-nowrap"
                       onClick={handleFetchModels}
@@ -403,6 +397,27 @@ export function SettingsDrawer() {
                     </button>
                   </div>
                 </SettingRow>
+                {modelList.length > 0 && (
+                  <SettingRow
+                    label={t('settings.pickModel')}
+                    desc={t('settings.modelsFetched', { count: modelList.length })}
+                  >
+                    <select
+                      className="h-[30px] px-2 bg-[var(--canvas-elevated)] border border-[var(--hairline)] rounded-[var(--radius-sm)] text-[var(--ink)] text-[12px] font-mono outline-none cursor-pointer focus:border-[var(--accent-gold)] w-[200px]"
+                      value={active.model}
+                      onChange={(e) => updateProvider(active.id, { model: e.target.value })}
+                    >
+                      {modelList.map((m) => (
+                        <option key={m} value={m}>
+                          {m}
+                        </option>
+                      ))}
+                      {active.model && !modelList.includes(active.model) && (
+                        <option value={active.model}>{active.model}</option>
+                      )}
+                    </select>
+                  </SettingRow>
+                )}
                 {modelsStatus === 'ok' && (
                   <div className="text-[11px] text-[var(--success)] border-t border-[var(--hairline)] pt-1.5">
                     {modelsMsg}

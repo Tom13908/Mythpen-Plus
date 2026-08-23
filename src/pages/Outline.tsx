@@ -266,7 +266,7 @@ export function Outline() {
                     {t('outline.chapterCount', { n: vol.chapters.length })}
                   </span>
                   <button
-                    className="w-5 h-5 flex items-center justify-center rounded border-none bg-none text-[var(--ink-mute)] opacity-0 group-hover:opacity-100 hover:text-[var(--error)] cursor-pointer transition-opacity shrink-0"
+                    className="w-5 h-5 flex items-center justify-center rounded border-none bg-none text-[var(--ink-mute)] opacity-50 hover:opacity-100 hover:text-[var(--error)] cursor-pointer transition-opacity shrink-0"
                     onClick={(e) => {
                       e.stopPropagation()
                       handleDeleteVolume(vol)
@@ -310,7 +310,7 @@ export function Outline() {
                         </div>
                         <div className="text-[12px] text-[var(--ink-tertiary)] mt-1 line-clamp-2">{ch.outline}</div>
                         <button
-                          className="absolute top-2 right-2 w-5 h-5 flex items-center justify-center rounded border-none bg-none text-[var(--ink-mute)] opacity-0 group-hover:opacity-100 hover:text-[var(--error)] cursor-pointer transition-opacity"
+                          className="absolute top-2 right-2 w-5 h-5 flex items-center justify-center rounded border-none bg-none text-[var(--ink-mute)] opacity-50 hover:opacity-100 hover:text-[var(--error)] cursor-pointer transition-opacity"
                           onClick={(e) => {
                             e.stopPropagation()
                             handleDeleteChapter(ch, vol.id)
