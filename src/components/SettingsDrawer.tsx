@@ -361,6 +361,23 @@ export function SettingsDrawer() {
                     placeholder="https://api.deepseek.com/v1"
                   />
                 </SettingRow>
+                <SettingRow label={t('settings.apiKey')}>
+                  <div className="flex gap-1 items-center">
+                    <input
+                      type={showApiKey ? 'text' : 'password'}
+                      className="h-[30px] px-2 bg-[var(--canvas-elevated)] border border-[var(--hairline)] rounded-[var(--radius-sm)] text-[var(--ink)] text-[12px] font-mono outline-none focus:border-[var(--accent-gold)] w-[180px]"
+                      value={active.apiKey}
+                      onChange={(e) => updateProvider(active.id, { apiKey: e.target.value })}
+                    />
+                    <button
+                      className="w-7 h-7 flex items-center justify-center rounded-[var(--radius-sm)] border-none bg-none text-[var(--ink-tertiary)] cursor-pointer hover:text-[var(--ink)] transition-colors shrink-0"
+                      onClick={() => setShowApiKey(!showApiKey)}
+                      title={showApiKey ? t('settings.hideKey') : t('settings.showKey')}
+                    >
+                      {showApiKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+                </SettingRow>
                 <SettingRow label={t('settings.model')} desc={t('settings.modelDesc')}>
                   <div className="flex gap-1 items-center">
                     <input
@@ -420,23 +437,6 @@ export function SettingsDrawer() {
                       onChange={(e) => updateProvider(active.id, { maxTokens: parseInt(e.target.value) || 0 })}
                     />
                     <span className="text-[11px] text-[var(--ink-mute)]">tokens</span>
-                  </div>
-                </SettingRow>
-                <SettingRow label={t('settings.apiKey')}>
-                  <div className="flex gap-1 items-center">
-                    <input
-                      type={showApiKey ? 'text' : 'password'}
-                      className="h-[30px] px-2 bg-[var(--canvas-elevated)] border border-[var(--hairline)] rounded-[var(--radius-sm)] text-[var(--ink)] text-[12px] font-mono outline-none focus:border-[var(--accent-gold)] w-[180px]"
-                      value={active.apiKey}
-                      onChange={(e) => updateProvider(active.id, { apiKey: e.target.value })}
-                    />
-                    <button
-                      className="w-7 h-7 flex items-center justify-center rounded-[var(--radius-sm)] border-none bg-none text-[var(--ink-tertiary)] cursor-pointer hover:text-[var(--ink)] transition-colors shrink-0"
-                      onClick={() => setShowApiKey(!showApiKey)}
-                      title={showApiKey ? t('settings.hideKey') : t('settings.showKey')}
-                    >
-                      {showApiKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                    </button>
                   </div>
                 </SettingRow>
               </>

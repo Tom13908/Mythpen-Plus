@@ -67,12 +67,20 @@ export const chaptersApi = {
     request(`/${encodeURIComponent(project)}/chapters/${num}`, { method: 'PUT', body: data }),
   create: (project: string, data: any) =>
     request(`/${encodeURIComponent(project)}/chapters`, { method: 'POST', body: data }),
+  remove: (project: string, num: number, volumeId?: number) =>
+    request(`/${encodeURIComponent(project)}/chapters/${num}${volumeId ? `?volume_id=${volumeId}` : ''}`, {
+      method: 'DELETE',
+    }),
 }
 
 // ─── Volumes ───
 
 export const volumesApi = {
   list: (project: string) => request(`/${encodeURIComponent(project)}/volumes`),
+  create: (project: string, title: string, summary = '') =>
+    request(`/${encodeURIComponent(project)}/volumes`, { method: 'POST', body: { title, summary } }),
+  remove: (project: string, id: number) =>
+    request(`/${encodeURIComponent(project)}/volumes/${id}`, { method: 'DELETE' }),
 }
 
 // ─── Characters ───

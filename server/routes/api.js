@@ -204,7 +204,11 @@ router.post('/:project/chapters', (req, res) => {
 });
 
 router.delete('/:project/chapters/:num', (req, res) => {
-  const changes = db.projectExecute(project(req.params.project), 'DELETE FROM chapters WHERE num = ?', [parseInt(req.params.num)]);
+  // volume_id 可选：章节号可能跨卷重复，带上卷号才能精确删除
+  const volumeId = req.query.volume_id ? parseInt(req.query.volume_id, 10) : null;
+  const changes = volumeId
+    ? db.projectExecute(project(req.params.project), 'DELETE FROM chapters WHERE num = ? AND volume_id = ?', [parseInt(req.params.num), volumeId])
+    : db.projectExecute(project(req.params.project), 'DELETE FROM chapters WHERE num = ?', [parseInt(req.params.num)]);
   if (changes === 0) return res.status(404).json({ error: { message: `章节 ${req.params.num} 不存在` } });
   db.recalculateWordCount(project(req.params.project));
   res.json({ success: true, deleted_num: parseInt(req.params.num) });
@@ -225,8 +229,10 @@ router.post('/:project/volumes', (req, res) => {
   const pdb = db.getProjectDb(project(req.params.project));
   const max = pdb.prepare('SELECT COALESCE(MAX(sort_order), 0) as mx FROM volumes').get();
   const sortOrder = (max?.mx || 0) + 1;
-  const result = pdb.prepare("INSERT INTO volumes (sort_order, title, summary, created_at) VALUES (?, ?, ?, datetime('now'))").run(sortOrder, title, summary);
-  res.status(201).json({ id: result.lastInsertRowid, title });
+  pdb.prepare("INSERT INTO volumes (sort_order, title, summary, created_at) VALUES (?, ?, ?, datetime('now'))").run(sortOrder, title, summary);
+  // sql.js 的 run() 不返回 lastInsertRowid，按 sort_order 回查新卷 id
+  const row = pdb.prepare('SELECT id FROM volumes WHERE sort_order = ?').get(sortOrder);
+  res.status(201).json({ id: row?.id, title });
 });
 
 router.put('/:project/volumes/:id', (req, res) => {

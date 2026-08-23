@@ -1,7 +1,7 @@
-import { Check, Loader, Pen, Plus, Save, ScrollText, Sparkles } from 'lucide-react'
+import { Check, Loader, Pen, Plus, Save, ScrollText, Sparkles, Trash2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useT } from '@/hooks/useT'
-import { aiApi, extractAIJsonObject, getAIResponseText } from '@/lib/api'
+import { aiApi, chaptersApi, extractAIJsonObject, getAIResponseText, volumesApi } from '@/lib/api'
 import { useChapterStore } from '@/stores/useChapterStore'
 import { useProjectStore } from '@/stores/useProjectStore'
 
@@ -87,6 +87,39 @@ export function Outline() {
       }
     } catch (e) {
       console.error('Create chapter failed:', e)
+    }
+  }
+
+  const handleNewVolume = async () => {
+    if (!currentProject) return
+    try {
+      await volumesApi.create(currentProject, `第${volumes.length + 1}卷`)
+      await loadChapters(currentProject)
+    } catch (e) {
+      console.error('Create volume failed:', e)
+    }
+  }
+
+  const handleDeleteChapter = async (ch: (typeof volumes)[0]['chapters'][0], volumeId: number) => {
+    if (!currentProject) return
+    if (!window.confirm(t('outline.deleteChapterConfirm', { title: ch.title }))) return
+    try {
+      await chaptersApi.remove(currentProject, ch.num, volumeId)
+      if (activeChapterId === ch.id) setActiveChapterId(null)
+      await loadChapters(currentProject)
+    } catch (e) {
+      console.error('Delete chapter failed:', e)
+    }
+  }
+
+  const handleDeleteVolume = async (vol: (typeof volumes)[0]) => {
+    if (!currentProject) return
+    if (!window.confirm(t('outline.deleteVolumeConfirm', { title: vol.title, n: vol.chapters.length }))) return
+    try {
+      await volumesApi.remove(currentProject, vol.id)
+      await loadChapters(currentProject)
+    } catch (e) {
+      console.error('Delete volume failed:', e)
     }
   }
 
@@ -217,7 +250,7 @@ export function Outline() {
             return (
               <div key={vol.id}>
                 <div
-                  className="px-4 pb-2 pt-1 font-display text-sm font-medium text-[var(--ink)] flex items-center gap-1 cursor-pointer select-none hover:opacity-80 transition-opacity"
+                  className="px-4 pb-2 pt-1 font-display text-sm font-medium text-[var(--ink)] flex items-center gap-1 cursor-pointer select-none hover:opacity-80 transition-opacity group"
                   onClick={() => toggleVolumeCollapse(vol.id)}
                 >
                   <span
@@ -232,13 +265,23 @@ export function Outline() {
                   <span className="text-[10px] text-[var(--ink-tertiary)] ml-auto">
                     {t('outline.chapterCount', { n: vol.chapters.length })}
                   </span>
+                  <button
+                    className="w-5 h-5 flex items-center justify-center rounded border-none bg-none text-[var(--ink-mute)] opacity-0 group-hover:opacity-100 hover:text-[var(--error)] cursor-pointer transition-opacity shrink-0"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      handleDeleteVolume(vol)
+                    }}
+                    title={t('outline.deleteVolume')}
+                  >
+                    <Trash2 className="w-3 h-3" />
+                  </button>
                 </div>
                 {!collapsed && (
                   <>
                     {vol.chapters.map((ch) => (
                       <div
                         key={ch.id}
-                        className={`p-3 mx-3 mb-1.5 rounded-lg border cursor-pointer transition-colors
+                        className={`p-3 mx-3 mb-1.5 rounded-lg border cursor-pointer transition-colors relative group
                           ${
                             activeChapterId === ch.id
                               ? 'bg-[var(--accent-gold-soft-bg)] border-[var(--accent-gold)]'
@@ -266,6 +309,16 @@ export function Outline() {
                             : t('sidebar.chapterTitle', { num: ch.num, title: ch.title })}
                         </div>
                         <div className="text-[12px] text-[var(--ink-tertiary)] mt-1 line-clamp-2">{ch.outline}</div>
+                        <button
+                          className="absolute top-2 right-2 w-5 h-5 flex items-center justify-center rounded border-none bg-none text-[var(--ink-mute)] opacity-0 group-hover:opacity-100 hover:text-[var(--error)] cursor-pointer transition-opacity"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleDeleteChapter(ch, vol.id)
+                          }}
+                          title={t('outline.deleteChapter')}
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
                       </div>
                     ))}
                     {/* Per-volume new chapter */}
@@ -281,6 +334,14 @@ export function Outline() {
               </div>
             )
           })}
+          {/* New volume */}
+          <div
+            className="flex items-center gap-1 mx-3 mb-2 px-3 py-1.5 rounded-lg text-[12px] text-[var(--accent-gold)] cursor-pointer transition-colors hover:bg-[var(--canvas-card)]"
+            onClick={handleNewVolume}
+          >
+            <Plus className="w-3 h-3" />
+            {t('outline.newVolume')}
+          </div>
         </div>
 
         {/* Editor panel */}

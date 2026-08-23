@@ -148,32 +148,54 @@ app.put('/api/ai/providers', (req, res) => {
 app.post('/api/ai/models', async (req, res) => {
   try {
     const { baseUrl, apiKey, type } = req.body || {};
-    if (!baseUrl) return res.status(400).json({ error: '缺少 baseUrl' });
+    if (!baseUrl) return res.status(400).json({ error: { message: '缺少 baseUrl' } });
 
-    let url = baseUrl.replace(/\/+$/, '');
-    const headers = { 'Content-Type': 'application/json' };
+    const base = baseUrl.replace(/\/+$/, '');
+    // 不同中转站的模型列表路径不一致，按可能性依次尝试
+    const candidates = [];
     if (type === 'claude') {
-      // Anthropic models endpoint: {base}/v1/models with x-api-key
-      if (!/\/v\d+$/.test(url)) url += '/v1';
-      url += '/models';
-      headers['x-api-key'] = apiKey || '';
-      headers['anthropic-version'] = '2023-06-01';
+      candidates.push(`${base}/v1/models`, `${base}/models`);
+    } else if (/\/v\d+$/.test(base)) {
+      candidates.push(`${base}/models`);
     } else {
-      // OpenAI & OpenAI Responses: {base}/models with Bearer
-      url += '/models';
-      headers['Authorization'] = `Bearer ${apiKey || ''}`;
+      candidates.push(`${base}/models`, `${base}/v1/models`);
     }
 
-    const response = await fetch(url, { headers });
-    if (!response.ok) {
-      const errText = await response.text();
-      return res.status(502).json({ error: `上游返回 ${response.status}`, detail: errText.slice(0, 300) });
+    let lastStatus = 0;
+    let lastText = '';
+    for (const url of candidates) {
+      const headers = { 'Content-Type': 'application/json' };
+      if (type === 'claude') {
+        headers['x-api-key'] = apiKey || '';
+        headers['anthropic-version'] = '2023-06-01';
+        headers['Authorization'] = `Bearer ${apiKey || ''}`; // 部分中转站只认 Bearer
+      } else {
+        headers['Authorization'] = `Bearer ${apiKey || ''}`;
+      }
+
+      let response;
+      try {
+        response = await fetch(url, { headers, signal: AbortSignal.timeout(20000) });
+      } catch (e) {
+        lastStatus = 0;
+        lastText = e.message;
+        continue;
+      }
+      if (response.ok) {
+        const data = await response.json();
+        const list = Array.isArray(data) ? data : data.data || [];
+        const models = list.map((m) => m.id).filter(Boolean).sort();
+        return res.json({ models });
+      }
+      lastStatus = response.status;
+      lastText = (await response.text()).slice(0, 200);
+      if (response.status !== 404) break; // 401/403 等鉴权错误换路径也没用
     }
-    const data = await response.json();
-    const models = (data.data || []).map(m => m.id).filter(Boolean).sort();
-    res.json({ models });
+
+    const reason = lastStatus ? `上游返回 ${lastStatus}` : '无法连接上游';
+    return res.status(502).json({ error: { message: `${reason}：${lastText || '无响应内容'}` } });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: { message: err.message } });
   }
 });
 
