@@ -18,12 +18,13 @@ import {
   RefreshCw,
   ScrollText,
   ShieldCheck,
+  Trash2,
   Users,
 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useDataRefresh } from '@/hooks/useDataRefresh'
 import { useT } from '@/hooks/useT'
-import { projectsApi, statsApi } from '@/lib/api'
+import { chaptersApi, projectsApi, statsApi, volumesApi } from '@/lib/api'
 import { refreshAllData } from '@/lib/dataEvents'
 import { NEXT_STATUS } from '@/lib/status'
 import { useStats } from '@/lib/useProjectData'
@@ -132,6 +133,44 @@ export function Sidebar() {
     setActivePage('page-writing')
   }
 
+  const handleNewVolume = async () => {
+    if (!currentProject) return
+    try {
+      await volumesApi.create(currentProject, `第${volumes.length + 1}卷`)
+      await useChapterStore.getState().loadChapters(currentProject)
+    } catch (e) {
+      console.error('Create volume failed:', e)
+    }
+  }
+
+  const handleDeleteChapter = async (ch: (typeof volumes)[0]['chapters'][0]) => {
+    if (!currentProject) return
+    if (!window.confirm(t('outline.deleteChapterConfirm', { title: ch.title }))) return
+    try {
+      await chaptersApi.remove(currentProject, ch.num, ch.volumeId)
+      if (currentChapter?.id === ch.id) useChapterStore.getState().setCurrentChapter(null)
+      await useChapterStore.getState().loadChapters(currentProject)
+      refreshAllData(currentProject).catch(() => {})
+    } catch (e) {
+      console.error('Delete chapter failed:', e)
+    }
+  }
+
+  const handleDeleteVolume = async (vol: (typeof volumes)[0]) => {
+    if (!currentProject) return
+    if (!window.confirm(t('outline.deleteVolumeConfirm', { title: vol.title, n: vol.chapters.length }))) return
+    try {
+      await volumesApi.remove(currentProject, vol.id)
+      if (vol.chapters.some((c) => c.id === currentChapter?.id)) {
+        useChapterStore.getState().setCurrentChapter(null)
+      }
+      await useChapterStore.getState().loadChapters(currentProject)
+      refreshAllData(currentProject).catch(() => {})
+    } catch (e) {
+      console.error('Delete volume failed:', e)
+    }
+  }
+
   const handleRefresh = () => {
     setSpinKey((k) => k + 1)
     refreshAllData(currentProject || undefined).catch(() => {})
@@ -177,6 +216,16 @@ export function Sidebar() {
                     ? vol.title
                     : t('sidebar.volumeTitle', { order: vol.sortOrder, title: vol.title })}
                 </span>
+                <button
+                  className="w-5 h-5 flex items-center justify-center rounded border-none bg-transparent text-[var(--ink-mute)] opacity-50 hover:opacity-100 hover:text-[var(--error)] cursor-pointer transition-opacity shrink-0"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    handleDeleteVolume(vol)
+                  }}
+                  title={t('outline.deleteVolume')}
+                >
+                  <Trash2 className="w-3 h-3" />
+                </button>
               </div>
               {!collapsedVols.has(vol.id) &&
                 vol.chapters.map((ch) => (
@@ -217,6 +266,16 @@ export function Sidebar() {
                           .catch(() => {})
                       }}
                     />
+                    <button
+                      className="w-4 h-4 flex items-center justify-center rounded border-none bg-transparent text-[var(--ink-mute)] opacity-50 hover:opacity-100 hover:text-[var(--error)] cursor-pointer transition-opacity shrink-0"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        handleDeleteChapter(ch)
+                      }}
+                      title={t('outline.deleteChapter')}
+                    >
+                      <Trash2 className="w-2.5 h-2.5" />
+                    </button>
                   </div>
                 ))}
               {/* Per-volume new chapter button */}
@@ -229,6 +288,14 @@ export function Sidebar() {
               </div>
             </div>
           ))}
+          {/* New volume */}
+          <div
+            className="flex items-center gap-1.5 px-3 py-1 text-[13px] text-[var(--accent-gold)] cursor-pointer transition-colors hover:bg-[var(--canvas-card)]"
+            onClick={handleNewVolume}
+          >
+            <Plus className="w-3.5 h-3.5 shrink-0" />
+            <span className="flex-1">{t('outline.newVolume')}</span>
+          </div>
         </div>
 
         <div className="h-px bg-[var(--hairline)] mx-3" />
