@@ -1,7 +1,7 @@
 /**
  * 种子数据脚本，用来创建一个名叫做 "我的科幻小说" 的示例项目，包含完整的演示数据
  */
-const { initDatabase, getProjectDb, getProjectDbPath, getConfigDb } = require('./db');
+const { initDatabase, openProjectDb, getProjectDb, getProjectDbPath, getConfigDb } = require('./db');
 const { v4: uuidv4 } = require('uuid');
 const fs = require('fs');
 
@@ -13,7 +13,8 @@ function seedProject(name) {
     if (fs.existsSync(f)) fs.unlinkSync(f);
   }
 
-  const db = getProjectDb(name);
+  // 种子脚本语义是"创建"，直接走 openProjectDb（getProjectDb 对不存在的项目会抛错）
+  const db = openProjectDb(dbPath);
 
   // ─── Project Meta ───
   const metaInsert = db.prepare('INSERT OR REPLACE INTO project_meta (key, value) VALUES (?, ?)');
@@ -144,7 +145,13 @@ function seedProject(name) {
 if (require.main === module) {
   (async () => {
     await initDatabase();
-    seedProject('我的科幻小说');
+    const dbPath = getProjectDbPath('我的科幻小说');
+    if (fs.existsSync(dbPath)) {
+      // 演示项目已存在：跳过种子，保护用户在演示项目里的修改不被覆盖
+      console.log('ℹ️ 演示项目已存在，跳过种子数据');
+    } else {
+      seedProject('我的科幻小说');
+    }
     console.log('✅ Seed complete.');
   })().catch(err => { console.error('❌ Seed failed:', err); process.exit(1); });
 }
