@@ -216,6 +216,27 @@ app.post('/api/ai/models', async (req, res) => {
 });
 
 
+// 端点和模型错配提示：常见于 claude 类型打 OpenAI 兼容服务（如
+// DeepSeek 官方只有 /chat/completions，没有 /v1/messages，返回 404）。
+function mismatchHint(aiConfig, err) {
+  const url = String(aiConfig.apiBaseUrl || '').toLowerCase();
+  const type = String(aiConfig.apiType || '').toLowerCase();
+  const model = String(aiConfig.apiModel || '').toLowerCase();
+  if (url.includes('deepseek') && (type === 'claude' || type === 'anthropic')) {
+    return '（检测到 DeepSeek 官方 API + Anthropic 类型错配：DeepSeek 官方只支持 OpenAI 兼容格式，请把接口类型改为 OpenAI）';
+  }
+  if (model.startsWith('deepseek') && (type === 'claude' || type === 'anthropic')) {
+    return '（检测到 DeepSeek 模型 + Anthropic 类型错配：请把接口类型改为 OpenAI）';
+  }
+  if (model.startsWith('claude') && (type === 'openai' || type === 'openai-response')) {
+    return '（检测到 Claude 模型 + OpenAI 类型错配：请把接口类型改为 Anthropic）';
+  }
+  if (err.status === 404 && (type === 'claude' || type === 'anthropic')) {
+    return '（404 常见原因：接口类型/地址与所选服务不匹配——Anthropic 类型会请求 /v1/messages，若你的服务不支持该端点请改用 OpenAI 类型）';
+  }
+  return '';
+}
+
 // ─── AI Chat Completion (non-streaming) ───
 app.post('/api/ai/chat', async (req, res) => {
   try {
@@ -300,11 +321,8 @@ app.post('/api/ai/chat/stream', async (req, res) => {
       } catch (err) {
         console.error('[AI Stream] 上游请求失败:', err.status || '', err.detail || err.message || err);
         const detail = err.detail || err.message || '';
-        if (err.status === 400) {
-          // 400 常见原因是端点类型/地址/模型三者错配（如 claude 格式打 deepseek 端点）
-          const hint = detail.includes('model') || /not.*found|invalid|unknown/i.test(detail)
-            ? '（模型名或端点类型与所选服务不匹配，请检查设置里的接口类型/地址/模型是否一致）'
-            : '';
+        const hint = mismatchHint(aiConfig, err);
+        if (err.status === 400 || err.status === 404) {
           res.write(`event: error\ndata: ${JSON.stringify({ error: `API Error: ${err.status}${hint}`, detail })}\n\n`);
         } else if (err.status) {
           res.write(`event: error\ndata: ${JSON.stringify({ error: `API Error: ${err.status}`, detail })}\n\n`);
