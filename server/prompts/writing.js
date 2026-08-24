@@ -4,12 +4,25 @@
  */
 const { buildProjectContext } = require('./context');
 
-function buildWritingPrompt(projectName) {
-  const context = buildProjectContext(projectName);
+// 上下文注入预算：contextLimit − 生成上限 − 固定开销（prompt 模板/工具定义/余量）
+// 至少保留 2000 token 给注入内容，防止极端配置下把上下文压没。
+function computeInjectionBudget(opts = {}) {
+  const contextLimit = opts.contextLimit || 128000;
+  const maxOutputTokens = opts.maxOutputTokens || 4096;
+  const budget = contextLimit - maxOutputTokens - 4000;
+  return Math.max(budget, 2000);
+}
+
+function buildWritingPrompt(projectName, opts = {}) {
+  const budget = computeInjectionBudget(opts);
+  const context = buildProjectContext(projectName, budget);
+  const targetWords = parseInt(opts.targetWords, 10) || 0;
+  const targetLine = targetWords > 0 ? `每章理想字数: ${targetWords} 字（尽量贴近，不必精确到个位）` : '';
 
   return `你是一位经验丰富专业的小说创作助手，帮助作者高质量完稿。
 
 ${context}
+${targetLine}
 
 ## 核心原则
 

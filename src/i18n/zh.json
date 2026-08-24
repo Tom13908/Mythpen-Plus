@@ -223,6 +223,8 @@
     "contextLimitDesc": "该模型的上下文 token 上限",
     "maxTokens": "单次生成上限",
     "maxTokensDesc": "单次请求最大生成 token 数",
+    "targetWordsPerChapter": "每章理想字数",
+    "targetWordsPerChapterDesc": "写作时的篇幅目标（0=不设置）。输入字数会自动调整单次生成上限",
     "quickSwitch": "切换模型档案（下次请求生效）",
     "showKey": "显示密钥",
     "hideKey": "隐藏密钥",

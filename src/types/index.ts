@@ -183,10 +183,12 @@ export interface AIProviderProfile {
   baseUrl: string
   apiKey: string
   model: string
-  /** 该模型的上下文窗口 token 上限（供后续上下文预算使用） */
+  /** 该模型的上下文窗口 token 上限（供上下文预算使用） */
   contextLimit: number
   /** 单次请求最大生成 token 数 */
   maxTokens: number
+  /** 每章理想字数（0 = 未设置，写作时注入 prompt 作为篇幅目标） */
+  targetWords: number
 }
 
 export interface AppSettings {

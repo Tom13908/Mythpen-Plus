@@ -223,6 +223,8 @@
     "contextLimitDesc": "Max context tokens of this model",
     "maxTokens": "Max Output Tokens",
     "maxTokensDesc": "Max tokens generated per request",
+    "targetWordsPerChapter": "Target Words / Chapter",
+    "targetWordsPerChapterDesc": "Writing length target (0 = unset). Entering words auto-adjusts max output tokens",
     "quickSwitch": "Switch model profile (applies to next request)",
     "showKey": "Show Key",
     "hideKey": "Hide Key",

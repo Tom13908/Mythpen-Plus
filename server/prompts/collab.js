@@ -4,8 +4,11 @@
  */
 const { buildProjectContext } = require('./context');
 
-function buildCollabPrompt(projectName) {
-  const context = buildProjectContext(projectName);
+function buildCollabPrompt(projectName, opts = {}) {
+  const contextLimit = opts.contextLimit || 128000;
+  const maxOutputTokens = opts.maxOutputTokens || 4096;
+  const budget = Math.max(contextLimit - maxOutputTokens - 4000, 2000);
+  const context = buildProjectContext(projectName, budget);
 
   return `你是一位富有创意的小说创作伙伴，善于通过对话帮助作者探索和构建精彩的故事世界。
 

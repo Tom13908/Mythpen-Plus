@@ -207,6 +207,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         model: 'deepseek-v4-flash',
         contextLimit: 128000,
         maxTokens: 4096,
+        targetWords: 0,
       },
     ]
     get().saveProvidersLocal(providers, id)

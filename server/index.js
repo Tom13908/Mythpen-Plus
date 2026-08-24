@@ -49,6 +49,8 @@ function getAiConfig() {
     apiModel: 'deepseek-v4-flash',
     apiType: '',
     maxOutputTokens: 4096,
+    contextLimit: 128000,
+    targetWords: 0,
   };
   try {
     const db = require('./db');
@@ -61,6 +63,8 @@ function getAiConfig() {
       apiModel: map.api_model || DEFAULTS.apiModel,
       apiType: map.api_type || DEFAULTS.apiType,
       maxOutputTokens: parseInt(map.max_output_tokens, 10) || DEFAULTS.maxOutputTokens,
+      contextLimit: parseInt(map.context_limit, 10) || DEFAULTS.contextLimit,
+      targetWords: parseInt(map.target_words, 10) || DEFAULTS.targetWords,
     };
     return aiConfigCache;
   } catch (e) {
@@ -98,6 +102,7 @@ function loadProviders() {
     model: ai.apiModel,
     contextLimit: 128000,
     maxTokens: 4096,
+    targetWords: 0,
   }];
   persistProviders(providers, 'default');
   return { providers, activeId: 'default' };
@@ -115,6 +120,8 @@ function persistProviders(providers, activeId) {
       ['api_model', active.model || ''],
       ['api_type', active.type || 'openai'],
       ['max_output_tokens', String(active.maxTokens || 4096)],
+      ['context_limit', String(active.contextLimit || 128000)],
+      ['target_words', String(active.targetWords || 0)],
     ];
     for (const [key, value] of flat) {
       db.dbExecute('INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)', [key, value]);
@@ -232,7 +239,7 @@ app.post('/api/ai/chat', async (req, res) => {
       aiConfig.apiType = req.body.apiType;
     }
     const adapter = createAIAdapter(aiConfig.apiModel, aiConfig, aiConfig.apiType);
-    const systemPrompt = buildWritingPrompt(project);
+    const systemPrompt = buildWritingPrompt(project, aiConfig);
 
     const result = await adapter.complete(systemPrompt, messages, null, temperature);
 
@@ -270,7 +277,7 @@ app.post('/api/ai/chat/stream', async (req, res) => {
 
     const aiConfig = getAiConfig();
     const adapter = createAIAdapter(aiConfig.apiModel, aiConfig, aiConfig.apiType);
-    const systemPrompt = mode === 'collab' ? buildCollabPrompt(project) : buildWritingPrompt(project);
+    const systemPrompt = mode === 'collab' ? buildCollabPrompt(project, aiConfig) : buildWritingPrompt(project, aiConfig);
 
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
@@ -403,7 +410,7 @@ app.post('/api/ai/continue', async (req, res) => {
 
     const aiConfig = getAiConfig();
     const adapter = createAIAdapter(aiConfig.apiModel, aiConfig, aiConfig.apiType);
-    const systemPrompt = buildWritingPrompt(project);
+    const systemPrompt = buildWritingPrompt(project, aiConfig);
 
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');

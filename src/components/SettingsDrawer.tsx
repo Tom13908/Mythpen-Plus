@@ -454,6 +454,29 @@ export function SettingsDrawer() {
                     <span className="text-[11px] text-[var(--ink-mute)]">tokens</span>
                   </div>
                 </SettingRow>
+                <SettingRow label={t('settings.targetWordsPerChapter')} desc={t('settings.targetWordsPerChapterDesc')}>
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="number"
+                      className="h-[30px] px-2 w-[100px] text-right bg-[var(--canvas-elevated)] border border-[var(--hairline)] rounded-[var(--radius-sm)] text-[var(--ink)] text-[12px] outline-none focus:border-[var(--accent-gold)]"
+                      value={active.targetWords || ''}
+                      min={0}
+                      step={500}
+                      placeholder="0 = 自动"
+                      onChange={(e) => {
+                        const v = parseInt(e.target.value) || 0
+                        if (v > 0) {
+                          // 联动：每章理想字数 → 自动把生成上限设为 字数×1.5 + 余量
+                          const autoMax = Math.max(1024, Math.round(v * 1.5 + 512))
+                          updateProvider(active.id, { targetWords: v, maxTokens: autoMax })
+                        } else {
+                          updateProvider(active.id, { targetWords: 0 })
+                        }
+                      }}
+                    />
+                    <span className="text-[11px] text-[var(--ink-mute)]">字/章</span>
+                  </div>
+                </SettingRow>
               </>
             )}
             <div className="pt-2.5 flex flex-col gap-1.5">
