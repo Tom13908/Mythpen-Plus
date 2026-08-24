@@ -102,6 +102,7 @@
     "deleteMessage": "Delete message",
     "deleteMessageConfirm": "Delete this message? This cannot be undone.",
     "executing": "Executing...",
+    "progressTool": "Running: {name} (round {round})",
     "params": "Params:",
     "result": "Result:",
     "generatingTitle": "AI Generating...",

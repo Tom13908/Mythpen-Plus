@@ -1,4 +1,4 @@
-import { Bot, Download, Eye, EyeOff, Globe, Palette, Pen, Plus, RotateCw, SwatchBook, X, Zap } from 'lucide-react'
+import { Bot, Eye, EyeOff, Globe, Palette, Pen, Plus, RotateCw, SwatchBook, X, Zap } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useT } from '@/hooks/useT'
 import { refreshAllData } from '@/lib/dataEvents'
@@ -36,9 +36,6 @@ export function SettingsDrawer() {
   const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'ok' | 'fail'>('idle')
   const [testTime, setTestTime] = useState(0)
   const [testError, setTestError] = useState('')
-  const [updateStatus, setUpdateStatus] = useState<'idle' | 'checking' | 'upToDate' | 'available' | 'error'>('idle')
-  const [latestVersion, setLatestVersion] = useState('')
-  const [releaseUrl, setReleaseUrl] = useState('')
   const [modelList, setModelList] = useState<string[]>([])
   const [modelsStatus, setModelsStatus] = useState<'idle' | 'fetching' | 'ok' | 'fail'>('idle')
   const [modelsMsg, setModelsMsg] = useState('')
@@ -61,24 +58,6 @@ export function SettingsDrawer() {
     } catch (err: any) {
       setModelsStatus('fail')
       setModelsMsg(err.message || 'Network error')
-    }
-  }
-
-  const checkForUpdates = async () => {
-    setUpdateStatus('checking')
-    try {
-      const res = await fetch('https://api.github.com/repos/niyongsheng/mythpen/releases/latest')
-      if (!res.ok) {
-        setUpdateStatus('error')
-        return
-      }
-      const data = await res.json()
-      const latestTag = (data.tag_name || '').replace(/^v/, '')
-      setLatestVersion(latestTag)
-      setReleaseUrl(data.html_url || `https://github.com/niyongsheng/mythpen/releases/tag/${data.tag_name}`)
-      setUpdateStatus(compareVersions(latestTag, __APP_VERSION__) > 0 ? 'available' : 'upToDate')
-    } catch {
-      setUpdateStatus('error')
     }
   }
 
@@ -517,50 +496,6 @@ export function SettingsDrawer() {
               )}
             </div>
           </div>
-
-          {/* ── Check for Updates ── */}
-          <div className="mb-7">
-            <div className="text-[11px] font-medium text-[var(--ink-mute)] tracking-[0.06em] uppercase mb-3">
-              <Download className="w-3.5 h-3.5 inline-block mr-1" /> {t('settings.checkUpdates')}
-            </div>
-            <SettingRow
-              label={t('settings.checkForUpdates')}
-              desc={t('settings.currentVersion', { version: __APP_VERSION__ })}
-            >
-              <button
-                className="h-[32px] px-4 rounded-lg border border-[var(--hairline-light)] bg-[var(--canvas-elevated)] text-[var(--ink)] text-[13px] cursor-pointer transition-colors hover:bg-[var(--canvas-mid)] disabled:opacity-50 flex items-center gap-1.5"
-                onClick={checkForUpdates}
-                disabled={updateStatus === 'checking'}
-              >
-                <Download className="w-3.5 h-3.5" />
-                {updateStatus === 'checking' ? t('settings.checkingUpdates') : t('settings.checkForUpdates')}
-              </button>
-            </SettingRow>
-            {updateStatus === 'upToDate' && (
-              <div className="text-[12px] text-[var(--success)] mt-2 flex items-center gap-1">
-                <span>{t('settings.upToDate')}</span>
-              </div>
-            )}
-            {updateStatus === 'available' && (
-              <div className="text-[12px] text-[var(--accent-gold)] mt-2 flex items-center gap-1">
-                <span>{t('settings.updateAvailable', { version: latestVersion })}</span>
-                <span className="text-[var(--ink-mute)]">·</span>
-                <a
-                  href={releaseUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-[var(--accent-gold)] hover:underline no-underline cursor-pointer"
-                >
-                  {t('settings.downloadUpdate')}
-                </a>
-              </div>
-            )}
-            {updateStatus === 'error' && (
-              <div className="text-[12px] text-[var(--error)] mt-2 flex items-center gap-1">
-                <span>{t('settings.updateCheckFailed')}</span>
-              </div>
-            )}
-          </div>
         </div>
 
         {/* Footer */}
@@ -583,18 +518,6 @@ export function SettingsDrawer() {
       </div>
     </>
   )
-}
-
-function compareVersions(a: string, b: string): number {
-  const pa = a.split('.').map(Number),
-    pb = b.split('.').map(Number)
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const na = pa[i] || 0,
-      nb = pb[i] || 0
-    if (na > nb) return 1
-    if (na < nb) return -1
-  }
-  return 0
 }
 
 function SettingRow({ label, desc, children }: { label: string; desc?: string; children: React.ReactNode }) {

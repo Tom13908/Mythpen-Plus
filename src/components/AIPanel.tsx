@@ -65,6 +65,7 @@ export function AIPanel() {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [editingMsgId, setEditingMsgId] = useState<string | null>(null)
   const [editDraft, setEditDraft] = useState('')
+  const [progressHint, setProgressHint] = useState('')
   const { toasts, show: showToast } = useToast()
   const { t } = useT()
   const { providers, activeProviderId, providersLoaded, loadProviders, switchProvider } = useSettingsStore()
@@ -283,6 +284,7 @@ export function AIPanel() {
     setTask({ status: 'running' })
     setStreamText('')
     setGenTokens(0)
+    setProgressHint('')
     streamRef.current = ''
 
     addAndSave({ role: 'user', content: userMsg })
@@ -362,6 +364,7 @@ export function AIPanel() {
         const updated = [...toolCallsRef.current, { ...tc, status: 'running' }]
         toolCallsRef.current = updated
         setToolCalls(updated)
+        setProgressHint(t('ai.progressTool', { name: tc.name, round: (tc.round ?? 0) + 1 }))
       },
       (tr: any) => {
         const updated = toolCallsRef.current.map((tc) =>
@@ -369,6 +372,9 @@ export function AIPanel() {
         )
         toolCallsRef.current = updated
         setToolCalls(updated)
+      },
+      (p: any) => {
+        setProgressHint(p?.hint ? `${p.hint} · 第${(p?.round ?? 0) + 1}轮` : '')
       },
     )
   }
@@ -495,12 +501,14 @@ export function AIPanel() {
                   {currentChapter?.title ? ` · ${currentChapter.title}` : ''}
                 </div>
                 <div className="text-[11px] text-[var(--ink-tertiary)] mt-0.5 font-mono">
-                  {genTokens > 0 ? t('ai.generatedTokens', { count: genTokens }) : t('ai.running')}
+                  {progressHint || (genTokens > 0 ? t('ai.generatedTokens', { count: genTokens }) : t('ai.running'))}
                 </div>
                 <div className="h-[3px] bg-[var(--canvas-mid)] rounded-full mt-1.5 overflow-hidden">
                   <div
                     className="h-full bg-[var(--accent-gold)] rounded-full animate-pulse"
-                    style={{ width: `${Math.min(95, genTokens * 2)}%` }}
+                    style={{
+                      width: `${Math.min(95, genTokens > 0 ? 30 + genTokens * 2 : toolCalls.filter((tc) => tc.status === 'done').length * 5)}%`,
+                    }}
                   />
                 </div>
               </div>

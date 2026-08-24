@@ -231,6 +231,7 @@ export const aiApi = {
     mode = 'writing',
     onToolCall?: (tc: any) => void,
     onToolResult?: (tr: any) => void,
+    onProgress?: (p: any) => void,
   ) => {
     const controller = new AbortController()
     fetch(`${API_BASE}/ai/chat/stream`, {
@@ -245,6 +246,7 @@ export const aiApi = {
           content_chunk: (data) => onChunk(data.text || ''),
           tool_call: (data) => onToolCall?.(data),
           tool_result: (data) => onToolResult?.(data),
+          progress: (data) => onProgress?.(data),
           error: (data) => {
             gotError = true
             onError(data)

@@ -102,6 +102,7 @@
     "deleteMessage": "删除消息",
     "deleteMessageConfirm": "确定删除这条消息？此操作不可恢复。",
     "executing": "执行中...",
+    "progressTool": "正在执行：{name}（第{round}轮）",
     "params": "参数：",
     "result": "结果：",
     "generatingTitle": "AI 生成中...",

@@ -310,9 +310,13 @@ app.post('/api/ai/chat/stream', async (req, res) => {
     let fullContent = '';
     let inputTokens = 0;
     let outputTokens = 0;
+    let emptyCount = 0; // 连续空响应（无文本无工具调用）容忍次数
     const MAX_TOOL_ROUNDS = 120;
+    const MAX_EMPTY_ROUNDS = 2;
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+      // 通知前端当前进行到第几轮（工具调用链之外的进度提示）
+      res.write(`event: progress\ndata: ${JSON.stringify({ round, doneTools: round, hint: '正在分析项目与执行工具' })}\n\n`);
       console.log(`[AI Stream] Round ${round}, messages: ${conversation.length}`);
 
       let result;
@@ -383,7 +387,18 @@ app.post('/api/ai/chat/stream', async (req, res) => {
         res.write(`event: content_chunk\ndata: ${JSON.stringify({ text: result.content, position: result.content.length })}\n\n`);
         break;
       } else {
-        console.log('[AI Stream] No content and no tool calls — ending');
+        // 空响应（既无文本也无工具调用）：提示 AI 继续，容忍有限次数后放弃。
+        // 否则像"只查了项目资料就结束"这种情况会静默产出空结果。
+        if (emptyCount < MAX_EMPTY_ROUNDS) {
+          emptyCount++;
+          conversation.push({
+            role: 'user',
+            content: '（系统提示：你上一轮既没有产出任何内容，也没有调用工具。请继续推进工作流——需要了解信息就用对应查询工具，写作就用 update_chapter 撰写正文，所有章节完成后输出章节总结文本。不要只回复空内容。）',
+          });
+          console.log(`[AI Stream] 空响应，已提示 AI 继续（${emptyCount}/${MAX_EMPTY_ROUNDS}）`);
+          continue;
+        }
+        console.log('[AI Stream] 空响应超过容忍次数 — ending');
         break;
       }
     }
