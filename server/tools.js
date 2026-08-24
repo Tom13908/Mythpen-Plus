@@ -1,4 +1,6 @@
 // ─── Tool schema definitions (OpenAI function-calling format) ───
+const { markAndEnqueue } = require('./summarizer');
+
 const TOOLS = [
   // ═══ Chapters ═══
   {
@@ -756,6 +758,10 @@ function executeTool(projectName, toolName, args) {
       params.push(chapter_num);
       pdb.prepare(`UPDATE chapters SET ${updates.join(', ')} WHERE num = ?`).run(...params);
       db.recalculateWordCount(projectName);
+      // 定稿触发自动总结（fire-and-forget）
+      if (fields.status === 'accepted') {
+        markAndEnqueue(projectName, chapter_num);
+      }
       return { updated: true, chapter_num, changed_fields: Object.keys(fields).filter(k => allowed.includes(k)) };
     }
     case 'delete_chapter': {

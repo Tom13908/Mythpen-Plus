@@ -21,7 +21,7 @@ let configDb;    // wrapped config database
 // ═══════════════════════════════════════════════════════════════
 
 const CONFIG_SCHEMA_VERSION = 1;
-const PROJECT_SCHEMA_VERSION = 2;
+const PROJECT_SCHEMA_VERSION = 3;
 
 // ═══════════════════════════════════════════════════════════════
 // sql.js wrapper — provides a better-sqlite3-compatible API
@@ -392,6 +392,10 @@ function closeProjectDb(filePath) {
 
 function getProjectDb(name) {
   const filePath = getProjectDbPath(name);
+  // 刚创建/刚打开的项目：连接已在缓存（flush 是 250ms 防抖，文件可能还没落盘）
+  if (projectConnections.has(filePath)) {
+    return projectConnections.get(filePath);
+  }
   // 已删除的项目：拒绝静默重建空库（否则前端轮询会让文件复活，
   // 导致同名项目无法创建）。创建项目的路径走 openProjectDb。
   if (!fs.existsSync(filePath)) {
@@ -598,6 +602,36 @@ const projectMigrations = [
     } catch (e) {
       console.warn("[DB] Migration v1→v2 (index) skipped:", e.message)
     }
+  },
+  // v2 → v3: 章节定稿自动总结的支撑结构
+  (db) => {
+    try {
+      db.exec("ALTER TABLE chapters ADD COLUMN summary_pending INTEGER DEFAULT 0");
+    } catch (e) {
+      // column already exists — ignore
+    }
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS relation_snapshots (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        chapter_id      INTEGER,
+        character_a_id  TEXT,
+        character_b_id  TEXT,
+        relation_type   TEXT,
+        description     TEXT,
+        intensity       INTEGER,
+        note            TEXT DEFAULT '',
+        created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE TABLE IF NOT EXISTS foreshadow_changes (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        foreshadow_id   TEXT,
+        chapter_id      INTEGER,
+        old_status      TEXT,
+        new_status      TEXT,
+        note            TEXT DEFAULT '',
+        created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+    `);
   },
 ];
 

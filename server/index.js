@@ -541,6 +541,13 @@ initDatabase()
       console.log(`  AI:      ${cfg.apiModel} @ ${cfg.apiBaseUrl}`);
       console.log(`  Startup: ${elapsed}ms`);
       console.log(`\n  Ready.\n`);
+      // 补跑上次中断的章节定稿总结
+      try {
+        const { scanPending } = require('./summarizer');
+        scanPending();
+      } catch (e) {
+        console.warn('[Summarizer] 启动补跑失败:', e.message);
+      }
     });
   })
   .catch(err => {

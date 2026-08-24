@@ -4,6 +4,7 @@ const { randomUUID } = require('crypto');
 const path = require('path');
 const fs = require('fs');
 const db = require('../db');
+const { markAndEnqueue } = require('../summarizer');
 
 function project(name) {
   // Ensure project DB is accessible
@@ -179,6 +180,11 @@ router.put('/:project/chapters/:num', (req, res) => {
   const sql = `UPDATE chapters SET ${fields.join(', ')} WHERE num = ?`;
   db.projectExecute(project(req.params.project), sql, params);
   db.recalculateWordCount(project(req.params.project));
+
+  // 定稿触发自动总结（fire-and-forget）
+  if (status === 'accepted') {
+    markAndEnqueue(project(req.params.project), parseInt(num));
+  }
 
   const updated = db.projectGet(project(req.params.project),
     'SELECT * FROM chapters WHERE num = ?', [parseInt(num)]
