@@ -1,5 +1,6 @@
-import { HeartHandshake, Link2, Loader, Plus, RefreshCcw, Sparkles, Users } from 'lucide-react'
+import { HeartHandshake, Link2, Loader, Pencil, RefreshCcw, Save, Sparkles, Trash2, Users, X } from 'lucide-react'
 import { useCallback, useMemo, useState } from 'react'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { useDataRefresh } from '@/hooks/useDataRefresh'
 import { useT } from '@/hooks/useT'
 import { aiApi, extractAIJsonArray, getAIResponseText, relationsApi } from '@/lib/api'
@@ -113,6 +114,15 @@ export function Relations() {
   const [layoutSeed, setLayoutSeed] = useState(0)
   const [organizing, setOrganizing] = useState(false)
   const [orgMsg, setOrgMsg] = useState('')
+  const [editingRelId, setEditingRelId] = useState<string | null>(null)
+  const [draft, setDraft] = useState<{ relation_type: string; description: string; intensity: string }>({
+    relation_type: '',
+    description: '',
+    intensity: '3',
+  })
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState('')
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
 
   const loading = charsLoading || relsLoading
   const chars = characters || []
@@ -201,6 +211,56 @@ export function Relations() {
     setOrganizing(false)
   }
 
+  const startEditRel = (r: any) => {
+    setEditingRelId(r.id)
+    setDraft({
+      relation_type: r.relation_type || '',
+      description: r.description || '',
+      intensity: String(r.intensity ?? 3),
+    })
+    setSaveError('')
+  }
+
+  const cancelEditRel = () => {
+    setEditingRelId(null)
+    setSaveError('')
+  }
+
+  const handleSaveRel = async () => {
+    if (!project || !editingRelId) return
+    if (!draft.relation_type.trim()) {
+      setSaveError(t('relations.saveFailed'))
+      return
+    }
+    setSaving(true)
+    setSaveError('')
+    try {
+      await relationsApi.update(project, editingRelId, {
+        relation_type: draft.relation_type.trim(),
+        description: draft.description,
+        intensity: parseInt(draft.intensity, 10) || 3,
+      })
+      await reloadRels()
+      setEditingRelId(null)
+    } catch (e) {
+      console.error('Save relation failed:', e)
+      setSaveError(t('relations.saveFailed'))
+    }
+    setSaving(false)
+  }
+
+  const handleDeleteRel = async (id: string) => {
+    if (!project) return
+    try {
+      await relationsApi.delete(project, id)
+      await reloadRels()
+    } catch (e) {
+      console.error('Delete relation failed:', e)
+    }
+    setConfirmDeleteId(null)
+    if (editingRelId === id) setEditingRelId(null)
+  }
+
   if (loading) {
     return <div className="flex-1 flex items-center justify-center text-[var(--ink-mute)]">{t('common.loading')}</div>
   }
@@ -225,6 +285,8 @@ export function Relations() {
   const relTypeCount = new Map<string, number>()
   rels.forEach((r: any) => relTypeCount.set(r.relation_type, (relTypeCount.get(r.relation_type) || 0) + 1))
   const sortedRelTypes = [...relTypeCount.entries()].sort((a, b) => b[1] - a[1])
+  const charNameById = new Map(chars.map((c: any) => [c.id, c.name]))
+  const deleteTarget = confirmDeleteId ? rels.find((r: any) => r.id === confirmDeleteId) : null
 
   return (
     <>
@@ -454,8 +516,112 @@ export function Relations() {
               <div className="text-[12px] text-[var(--ink-tertiary)] py-2 text-center">{t('relations.listEmpty')}</div>
             )}
           </div>
+
+          {/* Relation list (edit/delete) */}
+          <div className="bg-[var(--canvas-card)] border border-[var(--hairline)] rounded-lg p-3">
+            <div className="text-[11px] font-medium text-[var(--ink-secondary)] tracking-[0.04em] uppercase mb-2 flex items-center gap-1.5">
+              <HeartHandshake className="w-3 h-3" /> {t('relations.manageList')}
+            </div>
+            {rels.length === 0 && (
+              <div className="text-[12px] text-[var(--ink-tertiary)] py-2 text-center">{t('relations.listEmpty')}</div>
+            )}
+            <div className="flex flex-col gap-2">
+              {rels.map((r: any) =>
+                editingRelId === r.id ? (
+                  <div
+                    key={r.id}
+                    className="border border-[var(--hairline)] rounded-lg p-2 bg-[var(--canvas-soft)] flex flex-col gap-1.5"
+                  >
+                    <div className="text-[11px] text-[var(--ink-tertiary)] truncate">
+                      {charNameById.get(r.character_a_id) || r.character_a_id} ↔{' '}
+                      {charNameById.get(r.character_b_id) || r.character_b_id}
+                    </div>
+                    <input
+                      className="form-input h-[26px] text-[12px]"
+                      value={draft.relation_type}
+                      onChange={(e) => setDraft((d) => ({ ...d, relation_type: e.target.value }))}
+                      placeholder={t('relations.relationTypeField')}
+                    />
+                    <input
+                      className="form-input h-[26px] text-[12px]"
+                      value={draft.description}
+                      onChange={(e) => setDraft((d) => ({ ...d, description: e.target.value }))}
+                      placeholder={t('relations.descriptionField')}
+                    />
+                    <input
+                      type="number"
+                      min={1}
+                      max={5}
+                      className="form-input h-[26px] text-[12px]"
+                      value={draft.intensity}
+                      onChange={(e) => setDraft((d) => ({ ...d, intensity: e.target.value }))}
+                      placeholder={t('relations.intensityField')}
+                    />
+                    {saveError && <div className="text-[11px] text-[var(--error)]">{saveError}</div>}
+                    <div className="flex justify-end gap-1.5 mt-0.5">
+                      <button
+                        className="w-[24px] h-[24px] rounded-md flex items-center justify-center hover:bg-[var(--canvas-mid)] text-[var(--ink-tertiary)]"
+                        onClick={cancelEditRel}
+                        title={t('common.cancel')}
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        className="w-[24px] h-[24px] rounded-md flex items-center justify-center hover:bg-[var(--canvas-mid)] text-[var(--accent-gold)] disabled:opacity-50"
+                        onClick={handleSaveRel}
+                        disabled={saving}
+                        title={t('common.save')}
+                      >
+                        <Save className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div
+                    key={r.id}
+                    className="flex items-center justify-between gap-1.5 py-1 group border-b border-[var(--hairline)] last:border-0"
+                  >
+                    <div className="text-[12px] truncate min-w-0">
+                      <span className="text-[var(--ink)]">{charNameById.get(r.character_a_id) || '?'}</span>
+                      <span className="text-[var(--ink-mute)] mx-1">·{r.relation_type}·</span>
+                      <span className="text-[var(--ink)]">{charNameById.get(r.character_b_id) || '?'}</span>
+                    </div>
+                    <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button
+                        className="w-[22px] h-[22px] rounded-md flex items-center justify-center hover:bg-[var(--canvas-mid)] text-[var(--ink-tertiary)]"
+                        onClick={() => startEditRel(r)}
+                        title={t('relations.editRelation')}
+                      >
+                        <Pencil className="w-3 h-3" />
+                      </button>
+                      <button
+                        className="w-[22px] h-[22px] rounded-md flex items-center justify-center hover:bg-[var(--canvas-mid)] text-[var(--error)]"
+                        onClick={() => setConfirmDeleteId(r.id)}
+                        title={t('relations.deleteRelation')}
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </button>
+                    </div>
+                  </div>
+                ),
+              )}
+            </div>
+          </div>
         </div>
       </div>
+
+      {deleteTarget && (
+        <ConfirmDialog
+          title={t('relations.deleteConfirmTitle')}
+          message={t('relations.deleteConfirmMsg', {
+            a: charNameById.get(deleteTarget.character_a_id) || '?',
+            b: charNameById.get(deleteTarget.character_b_id) || '?',
+            type: deleteTarget.relation_type,
+          })}
+          onConfirm={() => handleDeleteRel(deleteTarget.id)}
+          onCancel={() => setConfirmDeleteId(null)}
+        />
+      )}
     </>
   )
 }

@@ -83,7 +83,7 @@
     "enterSend": "发送",
     "enterNewline": "换行",
     "escCancel": "取消",
-    "assistant": "AI 助手",
+    "assistant": "AI 协作",
     "generating": "生成中...",
     "modeCollab": "共创",
     "modeWriting": "写作",
@@ -128,7 +128,10 @@
     "errorPrefix": "错误: {msg}",
     "titleGenPrompt": "你是一个小说创作助手。请根据以下对话内容，用2-6个字概括这场对话的主题。直接返回标题，不要任何额外文字、标点或引号。\n\n{context}",
     "collabPrompt": "项目：{project}\n当前章节：第{num}章「{title}」\n\n用户提问：{userMsg}\n\n我们正在一起构建这部小说的世界。在回答前，你可以先查询当前的角色、世界观、伏笔等已有设定。根据用户的问题，展开有建设性的讨论，提出创意建议。如果达成共识，使用对应工具将设定写入数据库。",
-    "writingPrompt": "项目：{project}\n当前章节：第{num}章「{title}」\n\n用户指令：{userMsg}\n\n请按照六步写作工作流执行：先阅读当前章节的大纲和前文内容，根据大纲用 update_chapter 写入正文，按照系统指令中的工作流推进章节状态。完成后将章节状态设为 review。所有创作内容必须通过工具写入数据库。"
+    "writingPrompt": "项目：{project}\n当前章节：第{num}章「{title}」\n\n用户指令：{userMsg}\n\n请按照六步写作工作流执行：先阅读当前章节的大纲和前文内容，根据大纲用 update_chapter 写入正文，按照系统指令中的工作流推进章节状态。完成后将章节状态设为 review。所有创作内容必须通过工具写入数据库。",
+    "renameSession": "重命名会话",
+    "renameSessionPlaceholder": "会话名称",
+    "elapsed": "已用时 {sec}s"
   },
   "project": {
     "list": "我的项目",
@@ -201,7 +204,7 @@
     "apiKey": "API Key",
     "apiKeyDesc": "点击输入密钥",
     "model": "模型",
-    "maxTokens": "最大输出 Token",
+    "maxTokens": "单次生成上限",
     "httpTimeout": "HTTP 超时(秒)",
     "testConnection": "测试连接",
     "autoBackup": "自动备份",
@@ -222,10 +225,16 @@
     "modelsFetched": "已获取 {count} 个模型，从下方下拉选择",
     "contextLimit": "上下文窗口",
     "contextLimitDesc": "该模型的上下文 token 上限",
-    "maxTokens": "单次生成上限",
     "maxTokensDesc": "单次请求最大生成 token 数",
     "targetWordsPerChapter": "每章理想字数",
     "targetWordsPerChapterDesc": "写作时的篇幅目标（0=不设置）。输入字数会自动调整单次生成上限",
+    "temperature": "采样温度",
+    "temperatureDesc": "越高越有创造性，越低越稳定（0-{{max}}）。默认值 = 不发送该字段，用模型自己的默认",
+    "topP": "核采样 Top P",
+    "topPDesc": "与温度二选一调整即可，一般无需改动（0-1）",
+    "topPUnsupported": "当前供应商已实测不支持 top_p，发送该字段会被拒绝",
+    "samplingDefault": "默认",
+    "samplingClear": "恢复默认（不发送该字段）",
     "quickSwitch": "切换模型档案（下次请求生效）",
     "showKey": "显示密钥",
     "hideKey": "隐藏密钥",
@@ -246,7 +255,16 @@
     "downloadUpdate": "打开下载页面",
     "updateCheckFailed": "检查失败，请检查网络连接",
     "testMessage": "回复\"ok\"即可",
-    "langZh": "中文"
+    "langZh": "中文",
+    "storageLocation": "存储位置",
+    "storageLocationDesc": "所有项目数据库和配置文件的存储目录",
+    "storageChange": "更改位置",
+    "storagePathPlaceholder": "输入新的存储目录绝对路径",
+    "storageConfirm": "确认迁移",
+    "storageMigrating": "迁移中…",
+    "storageRestartHint": "迁移只复制数据到新位置，不会删除旧数据；需重启应用才能生效。",
+    "storageMigrateSuccess": "迁移完成，需重启应用生效。旧数据仍保留在 {oldDir}，确认新位置无误后可自行删除。",
+    "storageMigrateFailed": "迁移失败，请检查路径是否可写"
   },
   "pages": {
     "characters": "角色管理",
@@ -409,7 +427,10 @@
     "switchPhaseTitle": "切换项目阶段",
     "confirmSwitch": "确认切换",
     "switchPhaseBody": "将阶段切换到「{phase}」？",
-    "chapterFormat": "第{num}章 {title}"
+    "chapterFormat": "第{num}章 {title}",
+    "removeGenre": "移除",
+    "selectGenre": "选择类型",
+    "addGenre": "添加类型"
   },
   "characters": {
     "namePlaceholder": "给角色取个名字",
@@ -421,7 +442,17 @@
     "motivationPlaceholder": "核心动机",
     "arcPlaceholder": "角色成长弧光",
     "ageUnit": "岁",
-    "chapterAppearances": "章出场"
+    "chapterAppearances": "章出场",
+    "firstChapterLabel": "首次出场",
+    "chapterAppearancesTotal": "共出场 {n} 章",
+    "noAppearance": "尚未在任何章节出场",
+    "deleteConfirmTitle": "删除角色",
+    "deleteConfirmMsg": "确定要删除角色「{name}」吗？此操作不可撤销。",
+    "editCharacter": "编辑角色",
+    "deleteCharacter": "删除角色",
+    "saveFailed": "保存失败",
+    "deleteFailed": "删除失败",
+    "firstAppearsVolumeChapter": "首次出场在第{volume}卷第{chapter}章"
   },
   "export": {
     "formatEpubDesc": "电子书格式，支持封面",
@@ -460,7 +491,15 @@
     "priorityNormal": "普通",
     "priorityLow": "低",
     "statusField": "状态",
-    "expectedResolve": "预期回收: 第{n}章"
+    "expectedResolve": "预期回收: 第{n}章",
+    "abandoned": "已放弃",
+    "deleteConfirmTitle": "删除伏笔",
+    "deleteConfirmMsg": "确定要删除伏笔「{title}」吗？此操作不可撤销。",
+    "editEntry": "编辑伏笔",
+    "deleteEntry": "删除伏笔",
+    "saveFailed": "保存失败",
+    "deleteFailed": "删除失败",
+    "expectedResolveField": "预期回收章节"
   },
   "memory": {
     "aiPrompt": "你是一个叙事记忆提取助手。从小说章节内容中提取重要的叙事记忆——对后续情节有影响的情节承诺、角色线索、设定关键点。每个记忆用一句话概括。直接返回JSON数组，格式：[{\"category\":\"character|location|item|event|promise|other\",\"content\":\"...\"}]，不要前缀说明。",
@@ -563,7 +602,17 @@
     "roleMinor": "配角",
     "roleExtra": "其他",
     "existingRelations": "暂无",
-    "userPrompt": "角色：{charList}\n\n已有关系：\n{existingRels}\n\n请推断可能存在的其他角色关系。"
+    "userPrompt": "角色：{charList}\n\n已有关系：\n{existingRels}\n\n请推断可能存在的其他角色关系。",
+    "manageList": "关系列表",
+    "editRelation": "编辑关系",
+    "deleteRelation": "删除关系",
+    "relationTypeField": "关系类型",
+    "descriptionField": "描述",
+    "intensityField": "强度",
+    "deleteConfirmTitle": "删除关系",
+    "deleteConfirmMsg": "确定要删除「{a}」与「{b}」之间的「{type}」关系吗？此操作不可撤销。",
+    "saveFailed": "保存失败",
+    "deleteFailed": "删除失败"
   },
   "science": {
     "known": "已知",
@@ -601,7 +650,16 @@
     "descriptionPlaceholder": "详细描述...",
     "category": "分类",
     "name": "名称",
-    "description": "描述"
+    "description": "描述",
+    "tags": "标签",
+    "tagsPlaceholder": "用逗号分隔多个标签",
+    "deleteConfirmTitle": "删除条目",
+    "deleteConfirmMsg": "确定要删除条目「{name}」吗？此操作不可撤销。",
+    "editEntry": "编辑条目",
+    "deleteEntry": "删除条目",
+    "saveFailed": "保存失败",
+    "deleteFailed": "删除失败",
+    "selectHint": "从左侧选择一个条目查看详情"
   },
   "about": {
     "version": "版本号",

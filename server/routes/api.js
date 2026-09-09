@@ -27,6 +27,32 @@ function updateRecord(projectName, table, id, body, allowedFields, addUpdatedAt)
 }
 
 // ═══════════════════════════════════════════
+// STORAGE LOCATION
+// ═══════════════════════════════════════════
+
+router.get('/storage-location', (req, res) => {
+  res.json(db.getStorageInfo());
+});
+
+router.post('/storage-location', (req, res) => {
+  const { newDir } = req.body || {};
+  if (!newDir || !newDir.trim()) {
+    return res.status(400).json({ error: { message: '新路径不能为空' } });
+  }
+  try {
+    const result = db.migrateStorageLocation(newDir.trim());
+    res.json({
+      success: true,
+      newDir: result.newDir,
+      oldDir: result.oldDir,
+      message: '迁移完成，旧数据仍保留在原位置，需重启应用以生效。确认新位置数据无误后，可自行删除旧位置的文件。',
+    });
+  } catch (e) {
+    res.status(400).json({ error: { message: e.message || '迁移失败' } });
+  }
+});
+
+// ═══════════════════════════════════════════
 // PROJECTS
 // ═══════════════════════════════════════════
 
@@ -262,12 +288,23 @@ router.delete('/:project/volumes/:id', (req, res) => {
 
 router.get('/:project/characters', (req, res) => {
   const chars = db.projectQuery(project(req.params.project), 'SELECT * FROM characters ORDER BY name');
-  // Add chapter count
+  // Add chapter count + first appearance chapter (with its volume)
   for (const c of chars) {
     const cc = db.projectGet(project(req.params.project),
       'SELECT COUNT(*) as cnt FROM chapter_characters WHERE character_id = ?', [c.id]
     );
     c.chapterCount = cc?.cnt || 0;
+    const first = db.projectGet(project(req.params.project),
+      `SELECT ch.num as num, v.sort_order as volumeOrder, v.title as volumeTitle
+       FROM chapter_characters cc
+       JOIN chapters ch ON cc.chapter_id = ch.id
+       JOIN volumes v ON ch.volume_id = v.id
+       WHERE cc.character_id = ?
+       ORDER BY v.sort_order, ch.num LIMIT 1`, [c.id]
+    );
+    c.firstChapter = first?.num ?? null;
+    c.firstVolumeOrder = first?.volumeOrder ?? null;
+    c.firstVolumeTitle = first?.volumeTitle ?? null;
   }
   res.json(chars);
 });
@@ -387,6 +424,19 @@ router.post('/:project/foreshadows', (req, res) => {
     [id, title, description, status, priority, expected_resolve_chapter]
   );
   res.status(201).json({ id, title });
+});
+
+router.put('/:project/foreshadows/:id', (req, res) => {
+  const changes = updateRecord(project(req.params.project), 'foreshadows', req.params.id, req.body, ['title', 'description', 'status', 'priority', 'expected_resolve_chapter'], true);
+  if (changes === null) return res.status(400).json({ error: { message: '没有要更新的字段' } });
+  if (changes === 0) return res.status(404).json({ error: { message: '伏笔不存在' } });
+  res.json({ success: true });
+});
+
+router.delete('/:project/foreshadows/:id', (req, res) => {
+  const changes = db.projectExecute(project(req.params.project), 'DELETE FROM foreshadows WHERE id = ?', [req.params.id]);
+  if (changes === 0) return res.status(404).json({ error: { message: '伏笔不存在' } });
+  res.json({ success: true });
 });
 
 // ═══════════════════════════════════════════
@@ -624,6 +674,23 @@ router.get('/:project/stats', (req, res) => {
     });
   });
 
+// ─── Genres ───
+
+router.post('/:project/genres', (req, res) => {
+  const pn = project(req.params.project);
+  const { genre } = req.body || {};
+  if (!genre || !genre.trim()) return res.status(400).json({ error: { message: '关键词不能为空' } });
+  db.projectExecute(pn, 'INSERT OR IGNORE INTO project_genres (genre) VALUES (?)', [genre.trim()]);
+  res.status(201).json({ success: true });
+});
+
+router.delete('/:project/genres/:genre', (req, res) => {
+  const pn = project(req.params.project);
+  const changes = db.projectExecute(pn, 'DELETE FROM project_genres WHERE genre = ?', [req.params.genre]);
+  if (changes === 0) return res.status(404).json({ error: { message: '关键词不存在' } });
+  res.json({ success: true });
+});
+
 // ─── Target words ───
 
 router.put('/:project/target-words', (req, res) => {
@@ -711,7 +778,7 @@ router.get('/:project/export', async (req, res) => {
   db.projectQuery(pn, 'SELECT key, value FROM project_meta').forEach(m => meta[m.key] = m.value);
 
   const totalWords = chapters.reduce((s, c) => s + (c.content?.replace(/\s/g, '').length || 0), 0);
-  const EXPORT_DIR = path.join(require('os').homedir(), '.mythpen', 'exports', pn);
+  const EXPORT_DIR = db.getExportsDir(pn);
   if (!fs.existsSync(EXPORT_DIR)) fs.mkdirSync(EXPORT_DIR, { recursive: true });
 
   // Find cover image

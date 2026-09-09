@@ -9,6 +9,9 @@ interface AgentState {
   currentSessionId: string | null
   isRunning: boolean
   loading: boolean
+  // 记录最近一次 loadSessions/loadMessages 是为哪个项目发起的，
+  // 响应返回时用它判断结果是否已经过期（项目已经被切换），过期则丢弃。
+  _sessionsRequestProject: string | null
   setTask: (task: Partial<AgentTask>) => void
   addMessage: (msg: ChatMessage) => void
   replaceMessageId: (tempId: string, realId: string) => void
@@ -30,6 +33,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   currentSessionId: null,
   isRunning: false,
   loading: false,
+  _sessionsRequestProject: null,
 
   setTask: (task) =>
     set((s) => ({
@@ -70,14 +74,18 @@ export const useAgentStore = create<AgentState>((set, get) => ({
 
   loadSessions: async (project) => {
     if (!project) return
+    set({ _sessionsRequestProject: project })
     try {
       const sessions = await chatApi.listSessions(project)
+      // 项目已经被切走 — 这是过期响应，丢弃，不能覆盖当前项目的 sessions
+      if (get()._sessionsRequestProject !== project) return
       set({ sessions })
       // Auto-select first session if none selected (AIPanel will load messages)
       if (!get().currentSessionId && sessions.length > 0) {
         set({ currentSessionId: sessions[0].id })
       }
     } catch {
+      if (get()._sessionsRequestProject !== project) return
       set({ sessions: [] })
     }
   },

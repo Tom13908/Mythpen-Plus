@@ -69,7 +69,9 @@ export interface Character {
   avatar: string
   notes: string
   chapterCount?: number
-  role?: 'major' | 'minor' | 'extra'
+  firstChapter?: number | null
+  firstVolumeOrder?: number | null
+  firstVolumeTitle?: string | null
 }
 
 // ─── World ───
@@ -189,6 +191,12 @@ export interface AIProviderProfile {
   maxTokens: number
   /** 每章理想字数（0 = 未设置，写作时注入 prompt 作为篇幅目标） */
   targetWords: number
+  /** 采样温度（undefined = 未设置，请求不携带该字段，用模型默认值） */
+  temperature?: number
+  /** 核采样概率（undefined = 未设置，请求不携带该字段，用模型默认值） */
+  topP?: number
+  /** 探针结果：该供应商是否接受 top_p 参数（null = 未探测） */
+  toppSupported?: boolean | null
 }
 
 export interface AppSettings {

@@ -4,10 +4,32 @@
 
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 
-const DB_DIR = path.join(require('os').homedir(), '.mythpen');
+// ─── Storage location bootstrap ───
+// The "bootstrap" file itself always lives in the fixed default location
+// (~/.mythpen/.storage-location) so that "where is my data" never becomes
+// a circular lookup. It contains a single line: the custom storage dir path.
+// If absent, the default ~/.mythpen is used.
+const DEFAULT_DB_DIR = path.join(os.homedir(), '.mythpen');
+const BOOTSTRAP_FILE = path.join(DEFAULT_DB_DIR, '.storage-location');
+
+function _resolveDbDir() {
+  try {
+    if (fs.existsSync(BOOTSTRAP_FILE)) {
+      const custom = fs.readFileSync(BOOTSTRAP_FILE, 'utf-8').trim();
+      if (custom) return custom;
+    }
+  } catch (e) {
+    console.warn('[DB] Failed to read storage location bootstrap file:', e.message);
+  }
+  return DEFAULT_DB_DIR;
+}
+
+const DB_DIR = _resolveDbDir();
 const CONFIG_DB = path.join(DB_DIR, 'config.db');
 const PROJECTS_DIR = path.join(DB_DIR, 'projects');
+const EXPORTS_DIR = path.join(DB_DIR, 'exports');
 
 // ─── Ensure directories ───
 if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
@@ -705,6 +727,10 @@ function getCoverDir(projectName) {
   return path.join(PROJECTS_DIR, projectName);
 }
 
+function getExportsDir(projectName) {
+  return projectName ? path.join(EXPORTS_DIR, projectName) : EXPORTS_DIR;
+}
+
 function findCoverPath(projectName) {
   const coverDir = getCoverDir(projectName);
   const exts = ['png', 'jpg', 'webp', 'gif'];
@@ -717,6 +743,59 @@ function findCoverPath(projectName) {
 
 const MIME_TO_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif' };
 const EXT_TO_MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif' };
+
+// ═══════════════════════════════════════════════════════════════
+// Storage location (feature: 设置中修改数据库位置)
+// ═══════════════════════════════════════════════════════════════
+
+function getStorageInfo() {
+  return { currentDir: DB_DIR, isDefault: DB_DIR === DEFAULT_DB_DIR, defaultDir: DEFAULT_DB_DIR };
+}
+
+/**
+ * Copy config.db + projects/ + exports/ from the current storage dir to a new
+ * directory, then update the bootstrap file to point there. Old files are left
+ * in place (not deleted) so the user can verify before removing them manually.
+ * Caller is responsible for restarting the server afterwards — this function
+ * only prepares the new location; it does not swap the live DB_DIR in-process.
+ */
+function migrateStorageLocation(newDir) {
+  if (!newDir || typeof newDir !== 'string') throw new Error('新路径不能为空');
+  const resolved = path.resolve(newDir);
+  if (resolved === path.resolve(DB_DIR)) throw new Error('新路径与当前路径相同');
+
+  // Validate target is usable: must not already be an existing Mythpen dir with data,
+  // and must be writable (create it if missing).
+  if (!fs.existsSync(resolved)) {
+    fs.mkdirSync(resolved, { recursive: true });
+  } else {
+    const stat = fs.statSync(resolved);
+    if (!stat.isDirectory()) throw new Error('目标路径不是一个文件夹');
+  }
+  // Writability check
+  const probe = path.join(resolved, `.write-test-${Date.now()}`);
+  fs.writeFileSync(probe, 'ok');
+  fs.unlinkSync(probe);
+
+  // Copy config.db
+  if (fs.existsSync(CONFIG_DB)) {
+    fs.cpSync(CONFIG_DB, path.join(resolved, 'config.db'));
+  }
+  // Copy projects/
+  if (fs.existsSync(PROJECTS_DIR)) {
+    fs.cpSync(PROJECTS_DIR, path.join(resolved, 'projects'), { recursive: true });
+  }
+  // Copy exports/ (may not exist yet)
+  if (fs.existsSync(EXPORTS_DIR)) {
+    fs.cpSync(EXPORTS_DIR, path.join(resolved, 'exports'), { recursive: true });
+  }
+
+  // Update bootstrap file (always in the fixed default location)
+  if (!fs.existsSync(DEFAULT_DB_DIR)) fs.mkdirSync(DEFAULT_DB_DIR, { recursive: true });
+  fs.writeFileSync(BOOTSTRAP_FILE, resolved + '\n', 'utf-8');
+
+  return { newDir: resolved, oldDir: DB_DIR };
+}
 
 module.exports = {
   initDatabase,
@@ -734,7 +813,10 @@ module.exports = {
   projectTransaction,
   recalculateWordCount,
   getCoverDir,
+  getExportsDir,
   findCoverPath,
   MIME_TO_EXT,
   EXT_TO_MIME,
+  getStorageInfo,
+  migrateStorageLocation,
 };

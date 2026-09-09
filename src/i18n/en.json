@@ -128,7 +128,10 @@
     "errorPrefix": "Error: {msg}",
     "titleGenPrompt": "You are a novel writing assistant. Based on the following conversation, summarize the topic in 2-6 words. Return only the title, no extra text, punctuation, or quotes.\n\n{context}",
     "collabPrompt": "Project: {project}\nCurrent Chapter: Ch.{num} \"{title}\"\n\nUser Question: {userMsg}\n\nWe are building this novel's world together. Before answering, you can query existing characters, world settings, foreshadowing, etc. Based on the user's question, engage in constructive discussion and propose creative suggestions. If consensus is reached, use the appropriate tool to write settings to the database.",
-    "writingPrompt": "Project: {project}\nCurrent Chapter: Ch.{num} \"{title}\"\n\nUser Instruction: {userMsg}\n\nPlease follow the six-step writing workflow: first read the current chapter's outline and previous content, then use update_chapter to write the main text according to the outline, advance chapter status according to the workflow in the system instructions. After completion, set chapter status to review. All creative content must be written to the database through tools."
+    "writingPrompt": "Project: {project}\nCurrent Chapter: Ch.{num} \"{title}\"\n\nUser Instruction: {userMsg}\n\nPlease follow the six-step writing workflow: first read the current chapter's outline and previous content, then use update_chapter to write the main text according to the outline, advance chapter status according to the workflow in the system instructions. After completion, set chapter status to review. All creative content must be written to the database through tools.",
+    "renameSession": "Rename Session",
+    "renameSessionPlaceholder": "Session name",
+    "elapsed": "Elapsed {sec}s"
   },
   "project": {
     "list": "My Projects",
@@ -222,10 +225,16 @@
     "modelsFetched": "Fetched {count} models — pick one from the dropdown below",
     "contextLimit": "Context Window",
     "contextLimitDesc": "Max context tokens of this model",
-    "maxTokens": "Max Output Tokens",
     "maxTokensDesc": "Max tokens generated per request",
     "targetWordsPerChapter": "Target Words / Chapter",
     "targetWordsPerChapterDesc": "Writing length target (0 = unset). Entering words auto-adjusts max output tokens",
+    "temperature": "Temperature",
+    "temperatureDesc": "Higher = more creative, lower = more stable (0-{{max}}). Default = field not sent, model uses its own default",
+    "topP": "Top P (nucleus sampling)",
+    "topPDesc": "Adjust this OR temperature, usually fine to leave alone (0-1)",
+    "topPUnsupported": "This provider has been tested and does not support top_p — requests with it will be rejected",
+    "samplingDefault": "Default",
+    "samplingClear": "Reset to default (field not sent)",
     "quickSwitch": "Switch model profile (applies to next request)",
     "showKey": "Show Key",
     "hideKey": "Hide Key",
@@ -246,7 +255,16 @@
     "downloadUpdate": "Open Releases Page",
     "updateCheckFailed": "Check failed. Check your connection.",
     "testMessage": "Just reply \"ok\"",
-    "langZh": "Chinese"
+    "langZh": "Chinese",
+    "storageLocation": "Storage Location",
+    "storageLocationDesc": "Directory where all project databases and config files are stored",
+    "storageChange": "Change Location",
+    "storagePathPlaceholder": "Enter new storage directory absolute path",
+    "storageConfirm": "Confirm Migration",
+    "storageMigrating": "Migrating…",
+    "storageRestartHint": "Migration only copies data to the new location; old data is not deleted. A restart is required to take effect.",
+    "storageMigrateSuccess": "Migration complete, restart required to take effect. Old data remains at {oldDir}; you may delete it manually after verifying the new location.",
+    "storageMigrateFailed": "Migration failed, please check that the path is writable"
   },
   "pages": {
     "characters": "Characters",
@@ -409,7 +427,10 @@
     "switchPhaseTitle": "Switch Project Phase",
     "confirmSwitch": "Confirm Switch",
     "switchPhaseBody": "Switch phase to「{phase}」?",
-    "chapterFormat": "Ch. {num}: {title}"
+    "chapterFormat": "Ch. {num}: {title}",
+    "removeGenre": "Remove",
+    "selectGenre": "Select type",
+    "addGenre": "Add type"
   },
   "characters": {
     "namePlaceholder": "Give the character a name",
@@ -421,7 +442,17 @@
     "motivationPlaceholder": "Motivation",
     "arcPlaceholder": "Character arc",
     "ageUnit": "yrs",
-    "chapterAppearances": "ch."
+    "chapterAppearances": "ch.",
+    "firstChapterLabel": "First appears",
+    "chapterAppearancesTotal": "Appears in {n} ch.",
+    "noAppearance": "Not yet appeared in any chapter",
+    "deleteConfirmTitle": "Delete character",
+    "deleteConfirmMsg": "Delete character \"{name}\"? This cannot be undone.",
+    "editCharacter": "Edit character",
+    "deleteCharacter": "Delete character",
+    "saveFailed": "Save failed",
+    "deleteFailed": "Delete failed",
+    "firstAppearsVolumeChapter": "First appears in Vol. {volume}, Ch. {chapter}"
   },
   "export": {
     "formatEpubDesc": "E-book format, supports cover",
@@ -460,7 +491,15 @@
     "priorityNormal": "Normal",
     "priorityLow": "Low",
     "statusField": "Status",
-    "expectedResolve": "Expected resolve: Ch. {n}"
+    "expectedResolve": "Expected resolve: Ch. {n}",
+    "abandoned": "Abandoned",
+    "deleteConfirmTitle": "Delete foreshadow",
+    "deleteConfirmMsg": "Delete foreshadow \"{title}\"? This cannot be undone.",
+    "editEntry": "Edit foreshadow",
+    "deleteEntry": "Delete foreshadow",
+    "saveFailed": "Save failed",
+    "deleteFailed": "Delete failed",
+    "expectedResolveField": "Expected resolve chapter"
   },
   "memory": {
     "aiPrompt": "You are a narrative memory extraction assistant. Extract important narrative memories from novel chapters that affect future plot developments. Return a JSON array.",
@@ -563,7 +602,17 @@
     "roleMinor": "Supporting",
     "roleExtra": "Extra",
     "existingRelations": "None",
-    "userPrompt": "Characters: {charList}\n\nExisting relationships:\n{existingRels}\n\nPlease infer other possible character relationships."
+    "userPrompt": "Characters: {charList}\n\nExisting relationships:\n{existingRels}\n\nPlease infer other possible character relationships.",
+    "manageList": "Relation List",
+    "editRelation": "Edit Relation",
+    "deleteRelation": "Delete Relation",
+    "relationTypeField": "Relation Type",
+    "descriptionField": "Description",
+    "intensityField": "Intensity",
+    "deleteConfirmTitle": "Delete Relation",
+    "deleteConfirmMsg": "Delete the \"{type}\" relation between \"{a}\" and \"{b}\"? This cannot be undone.",
+    "saveFailed": "Save failed",
+    "deleteFailed": "Delete failed"
   },
   "science": {
     "known": "Known",
@@ -601,7 +650,16 @@
     "descriptionPlaceholder": "Detailed description...",
     "category": "Category",
     "name": "Name",
-    "description": "Description"
+    "description": "Description",
+    "tags": "Tags",
+    "tagsPlaceholder": "Comma-separated tags",
+    "deleteConfirmTitle": "Delete entry",
+    "deleteConfirmMsg": "Delete entry \"{name}\"? This cannot be undone.",
+    "editEntry": "Edit entry",
+    "deleteEntry": "Delete entry",
+    "saveFailed": "Save failed",
+    "deleteFailed": "Delete failed",
+    "selectHint": "Select an entry on the left to view details"
   },
   "about": {
     "version": "Version",

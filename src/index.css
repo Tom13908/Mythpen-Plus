@@ -101,6 +101,21 @@ html[data-theme="light"] {
 *, *::before, *::after { box-sizing: border-box; }
 html, body { height: 100%; overflow: hidden; }
 
+/* ─── AI 进度条动效 ─── */
+/* indeterminate 流光：模型思考/生成期间宽度未知时的"活着"暗示 */
+@keyframes ai-shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(250%); }
+}
+.ai-shimmer::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  width: 40%;
+  background: linear-gradient(90deg, transparent, rgba(240, 238, 230, 0.55), transparent);
+  animation: ai-shimmer 1.4s ease-in-out infinite;
+}
+
 body {
   font-family: var(--font-sans);
   background: var(--canvas);

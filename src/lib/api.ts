@@ -11,7 +11,7 @@ const API_BASE = isTauri ? 'http://127.0.0.1:3001/api' : '/api'
 // when a project name is empty. Skip the protocol colon so http:// stays.
 const apiUrl = (path: string) => `${API_BASE}${path}`.replace(/([^:]\/)\/+/g, '$1')
 
-async function request(path: string, options: any = {}) {
+export async function request(path: string, options: any = {}) {
   const url = apiUrl(path)
   const config: any = {
     headers: { 'Content-Type': 'application/json', ...options.headers },
@@ -26,6 +26,13 @@ async function request(path: string, options: any = {}) {
     throw new Error(err.error?.message || err.message || `HTTP ${res.status}`)
   }
   return res.json()
+}
+
+// ─── Storage location ───
+
+export const storageApi = {
+  get: (): Promise<{ currentDir: string; isDefault: boolean; defaultDir: string }> => request('/storage-location'),
+  migrate: (newDir: string) => request('/storage-location', { method: 'POST', body: { newDir } }),
 }
 
 // ─── Projects ───
@@ -55,6 +62,10 @@ export const projectsApi = {
     request(`/${encodeURIComponent(name)}/cover`, { method: 'POST', body: { data, mime } }),
   deleteCover: (name: string) => request(`/${encodeURIComponent(name)}/cover`, { method: 'DELETE' }),
   getCoverUrl: (name: string) => `/api/${encodeURIComponent(name)}/cover`,
+  addGenre: (name: string, genre: string) =>
+    request(`/${encodeURIComponent(name)}/genres`, { method: 'POST', body: { genre } }),
+  removeGenre: (name: string, genre: string) =>
+    request(`/${encodeURIComponent(name)}/genres/${encodeURIComponent(genre)}`, { method: 'DELETE' }),
 }
 
 // ─── Chapters ───
@@ -89,6 +100,10 @@ export const charactersApi = {
   list: (project: string) => request(`/${encodeURIComponent(project)}/characters`),
   create: (project: string, data: any) =>
     request(`/${encodeURIComponent(project)}/characters`, { method: 'POST', body: data }),
+  update: (project: string, id: string, data: any) =>
+    request(`/${encodeURIComponent(project)}/characters/${id}`, { method: 'PUT', body: data }),
+  delete: (project: string, id: string) =>
+    request(`/${encodeURIComponent(project)}/characters/${id}`, { method: 'DELETE' }),
 }
 
 // ─── World ───
@@ -97,6 +112,9 @@ export const worldApi = {
   list: (project: string) => request(`/${encodeURIComponent(project)}/world`),
   create: (project: string, data: any) =>
     request(`/${encodeURIComponent(project)}/world`, { method: 'POST', body: data }),
+  update: (project: string, id: string, data: any) =>
+    request(`/${encodeURIComponent(project)}/world/${id}`, { method: 'PUT', body: data }),
+  delete: (project: string, id: string) => request(`/${encodeURIComponent(project)}/world/${id}`, { method: 'DELETE' }),
 }
 
 // ─── Science ───
@@ -116,6 +134,10 @@ export const foreshadowsApi = {
   },
   create: (project: string, data: any) =>
     request(`/${encodeURIComponent(project)}/foreshadows`, { method: 'POST', body: data }),
+  update: (project: string, id: string, data: any) =>
+    request(`/${encodeURIComponent(project)}/foreshadows/${id}`, { method: 'PUT', body: data }),
+  delete: (project: string, id: string) =>
+    request(`/${encodeURIComponent(project)}/foreshadows/${id}`, { method: 'DELETE' }),
 }
 
 // ─── Relations ───
@@ -124,6 +146,10 @@ export const relationsApi = {
   list: (project: string) => request(`/${encodeURIComponent(project)}/relations`),
   create: (project: string, data: any) =>
     request(`/${encodeURIComponent(project)}/relations`, { method: 'POST', body: data }),
+  update: (project: string, id: string, data: any) =>
+    request(`/${encodeURIComponent(project)}/relations/${id}`, { method: 'PUT', body: data }),
+  delete: (project: string, id: string) =>
+    request(`/${encodeURIComponent(project)}/relations/${id}`, { method: 'DELETE' }),
 }
 
 // ─── Memories ───

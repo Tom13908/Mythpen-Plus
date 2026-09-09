@@ -15,10 +15,22 @@ interface Props {
   fields: Field[]
   onSubmit: (values: Record<string, string>) => Promise<void>
   onClose: () => void
+  /** 预填初始值，传入后弹层进入"编辑"模式（提交按钮文案变为保存）。 */
+  initialValues?: Record<string, string>
+  submitLabel?: string
+  submittingLabel?: string
 }
 
-export function SimpleCreateDialog({ title, fields, onSubmit, onClose }: Props) {
-  const [values, setValues] = useState<Record<string, string>>({})
+export function SimpleCreateDialog({
+  title,
+  fields,
+  onSubmit,
+  onClose,
+  initialValues,
+  submitLabel,
+  submittingLabel,
+}: Props) {
+  const [values, setValues] = useState<Record<string, string>>(initialValues || {})
   const [submitting, setSubmitting] = useState(false)
   const { t } = useT()
   const [error, setError] = useState('')
@@ -109,7 +121,7 @@ export function SimpleCreateDialog({ title, fields, onSubmit, onClose }: Props) 
             onClick={handleSubmit}
             disabled={submitting}
           >
-            {submitting ? t('common.creating') : t('common.create')}
+            {submitting ? submittingLabel || t('common.creating') : submitLabel || t('common.create')}
           </button>
         </div>
       </div>

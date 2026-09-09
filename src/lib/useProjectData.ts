@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useProjectStore } from '@/stores/useProjectStore'
 import type {
   Chapter,
@@ -34,17 +34,23 @@ function useApiData<T>(
   const [data, setData] = useState<T | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // 记录本次调用的序号，用于丢弃"切换过快时晚到的旧请求"结果，
+  // 避免旧项目的响应覆盖新项目已经展示的数据。
+  const requestIdRef = useRef(0)
 
   const load = useCallback(async () => {
+    const requestId = ++requestIdRef.current
     setLoading(true)
     setError(null)
     try {
       const result = await fetcher()
+      if (requestId !== requestIdRef.current) return // 已被更新的请求取代，丢弃
       setData(result)
     } catch (e) {
+      if (requestId !== requestIdRef.current) return
       setError((e as Error).message)
     } finally {
-      setLoading(false)
+      if (requestId === requestIdRef.current) setLoading(false)
     }
   }, deps)
 

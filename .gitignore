@@ -39,3 +39,12 @@ iteration backup/
 
 # Backup script marker (records git sha at last backup)
 .backup-last-sha
+
+# Local-only development helpers (keep on disk, do not publish)
+backup.sh
+start.sh
+stop.sh
+.claude/
+AGENT.md
+CLAUDE.md
+*.tsbuildinfo

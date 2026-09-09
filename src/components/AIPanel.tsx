@@ -53,6 +53,7 @@ export function AIPanel() {
   const abortRef = useRef<AbortController | null>(null)
   const msgEndRef = useRef<HTMLDivElement | null>(null)
   const scrollContainerRef = useRef<HTMLDivElement | null>(null)
+  const inputRef = useRef<HTMLTextAreaElement | null>(null)
   const streamRef = useRef('')
   const runningRef = useRef(false)
   const msgIdCounter = useRef(0)
@@ -65,7 +66,10 @@ export function AIPanel() {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [editingMsgId, setEditingMsgId] = useState<string | null>(null)
   const [editDraft, setEditDraft] = useState('')
+  const [renamingSession, setRenamingSession] = useState(false)
+  const [sessionTitleDraft, setSessionTitleDraft] = useState('')
   const [progressHint, setProgressHint] = useState('')
+  const [elapsedSec, setElapsedSec] = useState(0)
   const { toasts, show: showToast } = useToast()
   const { t } = useT()
   const { providers, activeProviderId, providersLoaded, loadProviders, switchProvider } = useSettingsStore()
@@ -73,6 +77,18 @@ export function AIPanel() {
   useEffect(() => {
     if (!providersLoaded) loadProviders()
   }, [providersLoaded, loadProviders])
+
+  // ── 任务计时器：任务运行期间逐秒跳动，让长等待可感知 ──
+  useEffect(() => {
+    if (!isRunning) {
+      setElapsedSec(0)
+      return
+    }
+    const startAt = Date.now()
+    setElapsedSec(0)
+    const timer = setInterval(() => setElapsedSec(Math.floor((Date.now() - startAt) / 1000)), 1000)
+    return () => clearInterval(timer)
+  }, [isRunning])
 
   // ── 用户消息编辑/删除 ──
   const handleSaveEdit = (msgId: string) => {
@@ -90,6 +106,21 @@ export function AIPanel() {
     const toDelete = messages.slice(idx)
     useAgentStore.setState({ messages: messages.slice(0, idx) })
     toDelete.forEach((m) => chatApi.deleteMessage(project, m.id).catch(() => {}))
+  }
+
+  // ── 会话改名 ──
+  const startRenameSession = () => {
+    const current = sessions.find((s: any) => s.id === currentSessionId)
+    if (!current) return
+    setSessionTitleDraft(current.title)
+    setRenamingSession(true)
+  }
+
+  const handleSaveSessionTitle = () => {
+    if (project && currentSessionId && sessionTitleDraft.trim()) {
+      void updateSessionTitle(project, currentSessionId, sessionTitleDraft.trim())
+    }
+    setRenamingSession(false)
   }
 
   // Resize handle drag logic
@@ -189,8 +220,10 @@ export function AIPanel() {
   useEffect(() => {
     if (!project) return
     sessionsLoadedRef.current = false
-    // Reset stale session from previous project before loading
-    useAgentStore.setState({ currentSessionId: null, messages: [] })
+    // Reset stale session AND session list from previous project before loading —
+    // 之前只清了 currentSessionId/messages，sessions 列表会残留旧项目的会话，
+    // 在新列表还没返回前的这段时间里就会显示错误的项目会话。
+    useAgentStore.setState({ currentSessionId: null, messages: [], sessions: [] })
     loadSessions(project).then(() => {
       // Guard: ignore stale completions — captured project must match the current real project
       const currentProject = useProjectStore.getState().currentProject
@@ -291,7 +324,10 @@ export function AIPanel() {
     setInput('')
     // Force DOM clear — React 19 batch 处理后 onInput 事件可能恢复旧值
     const el = document.getElementById('ai-chat-input') as HTMLTextAreaElement | null
-    if (el) el.value = ''
+    if (el) {
+      el.value = ''
+      el.style.height = 'auto'
+    }
 
     const ch = currentChapter
 
@@ -364,7 +400,12 @@ export function AIPanel() {
         const updated = [...toolCallsRef.current, { ...tc, status: 'running' }]
         toolCallsRef.current = updated
         setToolCalls(updated)
-        setProgressHint(t('ai.progressTool', { name: tc.name, round: (tc.round ?? 0) + 1 }))
+        // 优先用服务端发来的中文描述
+        setProgressHint(
+          tc.hint
+            ? `${tc.hint} · 第${(tc.round ?? 0) + 1}轮`
+            : t('ai.progressTool', { name: tc.name, round: (tc.round ?? 0) + 1 }),
+        )
       },
       (tr: any) => {
         const updated = toolCallsRef.current.map((tc) =>
@@ -409,6 +450,63 @@ export function AIPanel() {
               {isRunning ? t('ai.generating') : project || t('ai.idle')}
             </span>
           </div>
+          {/* Task progress (between status and mode toggle) */}
+          {isRunning && (
+            <div className="mt-2 p-2.5 bg-[var(--accent-gold-soft-bg)] border border-[rgba(201,169,110,0.3)] rounded-lg">
+              <div className="flex items-center gap-2">
+                <div className="flex-1 min-w-0">
+                  <div className="text-[12px] text-[var(--ink)] font-medium flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 inline-block mr-1" />
+                    {taskName}
+                    {currentChapter?.title ? ` · ${currentChapter.title}` : ''}
+                    <span className="ml-auto text-[10px] font-mono text-[var(--ink-mute)] shrink-0">
+                      {t('ai.elapsed', { sec: elapsedSec })}
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-[var(--ink-tertiary)] mt-0.5 font-mono truncate">
+                    {progressHint || (genTokens > 0 ? t('ai.generatedTokens', { count: genTokens }) : t('ai.running'))}
+                  </div>
+                  {/* 最近工具流水：AI 每步动作的细分过程 */}
+                  {toolCalls.length > 0 && (
+                    <div className="mt-1.5 flex flex-col gap-[3px] max-h-[64px] overflow-hidden">
+                      {toolCalls.slice(-4).map((tc: any) => (
+                        <div key={tc.id} className="flex items-center gap-1.5 text-[10px] leading-none">
+                          {tc.status === 'done' ? (
+                            <ShieldCheck className="w-2.5 h-2.5 text-[var(--success)] shrink-0" />
+                          ) : (
+                            <Loader className="w-2.5 h-2.5 text-[var(--accent-gold)] shrink-0 animate-spin" />
+                          )}
+                          <span
+                            className={`font-sans truncate ${
+                              tc.status === 'done' ? 'text-[var(--ink-mute)]' : 'text-[var(--accent-gold-soft)]'
+                            }`}
+                          >
+                            {tc.hint || t('ai.progressTool', { name: tc.name, round: (tc.round ?? 0) + 1 })}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {/* 进度条：工具驱动的确定性进度 + shimmer 流光动效 */}
+                  <div className="h-[3px] bg-[var(--canvas-mid)] rounded-full mt-1.5 overflow-hidden">
+                    <div
+                      className="h-full bg-[var(--accent-gold)] rounded-full relative overflow-hidden transition-[width] duration-700 ease-out ai-shimmer"
+                      style={{
+                        width: `${Math.min(95, genTokens > 0 ? 30 + genTokens * 2 : 8 + toolCalls.filter((tc) => tc.status === 'done').length * 5)}%`,
+                      }}
+                    />
+                  </div>
+                </div>
+                <button
+                  className="w-[26px] h-[26px] flex items-center justify-center rounded-[var(--radius-sm)] border border-[var(--hairline-light)] text-[var(--ink-tertiary)] text-[13px] cursor-pointer shrink-0 hover:bg-[var(--error-soft)] hover:text-[var(--error)] hover:border-[var(--error)] transition-colors"
+                  onClick={stopTask}
+                  title={t('ai.cancel')}
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
+            </div>
+          )}
           {/* Mode toggle */}
           <div className="flex mt-2 bg-[var(--canvas-card)] rounded-[var(--radius-sm)] p-[2px] border border-[var(--hairline)]">
             <button
@@ -451,19 +549,43 @@ export function AIPanel() {
 
         {/* Session selector */}
         <div className="flex items-center gap-1.5">
-          <select
-            id="ai-session-select"
-            name="ai-session-select"
-            className="flex-1 h-[28px] px-2 bg-[var(--canvas-elevated)] border border-[var(--hairline)] rounded-[var(--radius-sm)] text-[var(--ink)] text-[12px] outline-none cursor-pointer focus:border-[var(--accent-gold)]"
-            value={currentSessionId || ''}
-            onChange={(e) => e.target.value && switchSession(project, e.target.value)}
-          >
-            {sessions.map((s: any, i) => (
-              <option key={`${s.id}-${i}`} value={s.id}>
-                {s.title}
-              </option>
-            ))}
-          </select>
+          {renamingSession ? (
+            <input
+              className="flex-1 h-[28px] px-2 bg-[var(--canvas-elevated)] border border-[var(--accent-gold)] rounded-[var(--radius-sm)] text-[var(--ink)] text-[12px] outline-none"
+              value={sessionTitleDraft}
+              onChange={(e) => setSessionTitleDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleSaveSessionTitle()
+                if (e.key === 'Escape') setRenamingSession(false)
+              }}
+              onBlur={handleSaveSessionTitle}
+              placeholder={t('ai.renameSessionPlaceholder')}
+              autoFocus
+            />
+          ) : (
+            <select
+              id="ai-session-select"
+              name="ai-session-select"
+              className="flex-1 h-[28px] px-2 bg-[var(--canvas-elevated)] border border-[var(--hairline)] rounded-[var(--radius-sm)] text-[var(--ink)] text-[12px] outline-none cursor-pointer focus:border-[var(--accent-gold)]"
+              value={currentSessionId || ''}
+              onChange={(e) => e.target.value && switchSession(project, e.target.value)}
+            >
+              {sessions.map((s: any, i) => (
+                <option key={`${s.id}-${i}`} value={s.id}>
+                  {s.title}
+                </option>
+              ))}
+            </select>
+          )}
+          {!renamingSession && currentSessionId && (
+            <button
+              className="w-7 h-7 flex items-center justify-center rounded-[var(--radius-sm)] border border-[var(--hairline)] bg-[var(--canvas-elevated)] text-[var(--ink-tertiary)] cursor-pointer hover:text-[var(--ink)] hover:bg-[var(--canvas-mid)] transition-colors shrink-0"
+              onClick={startRenameSession}
+              title={t('ai.renameSession')}
+            >
+              <Pencil className="w-3.5 h-3.5" />
+            </button>
+          )}
           <button
             className="w-7 h-7 flex items-center justify-center rounded-[var(--radius-sm)] border border-[var(--hairline)] bg-[var(--canvas-elevated)] text-[var(--ink-tertiary)] cursor-pointer hover:text-[var(--ink)] hover:bg-[var(--canvas-mid)] transition-colors shrink-0"
             onClick={() => {
@@ -489,40 +611,6 @@ export function AIPanel() {
 
       {/* Scrollable messages area */}
       <div ref={scrollContainerRef} className="flex-1 overflow-y-auto min-h-0 custom-scrollbar">
-        {/* Task runner */}
-        {isRunning && (
-          <div className="mx-4 mb-2.5 p-3 bg-[var(--accent-gold-soft-bg)] border border-[rgba(201,169,110,0.3)] rounded-lg">
-            <div className="flex items-center gap-2.5">
-              <span className="w-[7px] h-[7px] rounded-full bg-[var(--warning)] animate-pulse self-start mt-1 shrink-0" />
-              <div className="flex-1 min-w-0">
-                <div className="text-[12px] text-[var(--ink)] font-medium flex items-center gap-1.5">
-                  <Sparkles className="w-3.5 h-3.5 inline-block mr-1" />
-                  {taskName}
-                  {currentChapter?.title ? ` · ${currentChapter.title}` : ''}
-                </div>
-                <div className="text-[11px] text-[var(--ink-tertiary)] mt-0.5 font-mono">
-                  {progressHint || (genTokens > 0 ? t('ai.generatedTokens', { count: genTokens }) : t('ai.running'))}
-                </div>
-                <div className="h-[3px] bg-[var(--canvas-mid)] rounded-full mt-1.5 overflow-hidden">
-                  <div
-                    className="h-full bg-[var(--accent-gold)] rounded-full animate-pulse"
-                    style={{
-                      width: `${Math.min(95, genTokens > 0 ? 30 + genTokens * 2 : toolCalls.filter((tc) => tc.status === 'done').length * 5)}%`,
-                    }}
-                  />
-                </div>
-              </div>
-              <button
-                className="w-[26px] h-[26px] flex items-center justify-center rounded-[var(--radius-sm)] border border-[var(--hairline-light)] text-[var(--ink-tertiary)] text-[13px] cursor-pointer shrink-0 hover:bg-[var(--error-soft)] hover:text-[var(--error)] hover:border-[var(--error)] transition-colors"
-                onClick={stopTask}
-                title={t('ai.cancel')}
-              >
-                <X className="w-3 h-3" />
-              </button>
-            </div>
-          </div>
-        )}
-
         {/* Consistency report */}
         {showConsistency && (
           <div
@@ -630,29 +718,91 @@ export function AIPanel() {
               )}
               {msg.role === 'ai' && msg.content && (
                 <div
-                  className={`p-2.5 rounded-lg text-[13px] leading-[1.6] mb-2 ${msg.content.startsWith('完成') || msg.content.startsWith('错误') ? 'text-[var(--ink-secondary)]' : 'bg-[var(--canvas-card)] text-[var(--ink-secondary)]'}`}
+                  className={`group relative p-2.5 rounded-lg text-[13px] leading-[1.6] mb-2 ${msg.content.startsWith('完成') || msg.content.startsWith('错误') ? 'text-[var(--ink-secondary)]' : 'bg-[var(--canvas-card)] text-[var(--ink-secondary)]'}`}
                 >
-                  {/* Inline tool calls */}
-                  {msg.toolCalls && msg.toolCalls.length > 0 && (
-                    <div className="mb-1.5 space-y-[2px]">
-                      {msg.toolCalls.map((tc: any) => (
-                        <div
-                          key={tc.id}
-                          className="flex items-center gap-1.5 px-2 py-1 rounded text-[11px] bg-[var(--canvas-mid)]"
+                  {editingMsgId === msg.id ? (
+                    <div className="flex flex-col gap-1.5">
+                      <textarea
+                        className="w-full min-h-[60px] bg-[var(--canvas-elevated)] border border-[var(--accent-gold)] rounded p-1.5 text-[13px] leading-[1.6] text-[var(--ink)] outline-none resize-y custom-scrollbar"
+                        value={editDraft}
+                        onChange={(e) => setEditDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleSaveEdit(msg.id)
+                          if (e.key === 'Escape') {
+                            setEditingMsgId(null)
+                            setEditDraft('')
+                          }
+                        }}
+                        autoFocus
+                      />
+                      <div className="flex gap-1.5 justify-end">
+                        <button
+                          className="px-2.5 h-[24px] rounded border border-[var(--hairline)] bg-[var(--canvas-card)] text-[12px] text-[var(--ink-secondary)] cursor-pointer hover:bg-[var(--canvas-mid)]"
+                          onClick={() => {
+                            setEditingMsgId(null)
+                            setEditDraft('')
+                          }}
                         >
-                          <span
-                            className="w-[5px] h-[5px] rounded-full shrink-0"
-                            style={{ background: toolTypeColor[getToolType(tc.name)] || 'var(--info)' }}
-                          />
-                          <span className="font-medium text-[var(--ink)]">{tc.name}</span>
-                          <span className="text-[var(--ink-tertiary)] truncate">{formatToolArgs(tc.arguments)}</span>
-                          {tc.result && !tc.result.error && <span className="ml-auto text-[var(--success)]">✓</span>}
-                          {tc.result?.error && <span className="ml-auto text-[var(--error)]">✗</span>}
-                        </div>
-                      ))}
+                          {t('common.cancel')}
+                        </button>
+                        <button
+                          className="px-2.5 h-[24px] rounded border-none bg-[var(--accent-gold)] text-[12px] text-[var(--canvas)] font-medium cursor-pointer hover:bg-[var(--accent-gold-soft)]"
+                          onClick={() => handleSaveEdit(msg.id)}
+                        >
+                          {t('common.save')}
+                        </button>
+                      </div>
                     </div>
+                  ) : (
+                    <>
+                      {/* Inline tool calls */}
+                      {msg.toolCalls && msg.toolCalls.length > 0 && (
+                        <div className="mb-1.5 space-y-[2px]">
+                          {msg.toolCalls.map((tc: any) => (
+                            <div
+                              key={tc.id}
+                              className="flex items-center gap-1.5 px-2 py-1 rounded text-[11px] bg-[var(--canvas-mid)]"
+                            >
+                              <span
+                                className="w-[5px] h-[5px] rounded-full shrink-0"
+                                style={{ background: toolTypeColor[getToolType(tc.name)] || 'var(--info)' }}
+                              />
+                              <span className="font-medium text-[var(--ink)]">{tc.name}</span>
+                              <span className="text-[var(--ink-tertiary)] truncate">
+                                {formatToolArgs(tc.arguments)}
+                              </span>
+                              {tc.result && !tc.result.error && (
+                                <span className="ml-auto text-[var(--success)]">✓</span>
+                              )}
+                              {tc.result?.error && <span className="ml-auto text-[var(--error)]">✗</span>}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <MarkdownContent content={msg.content} />
+                      <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity mt-1.5 pt-1.5 border-t border-[var(--hairline)]">
+                        <button
+                          className="h-[22px] px-2 flex items-center gap-1 rounded border-none bg-transparent text-[var(--ink-mute)] hover:text-[var(--ink)] hover:bg-[var(--canvas-elevated)] cursor-pointer text-[11px]"
+                          onClick={() => {
+                            setEditingMsgId(msg.id)
+                            setEditDraft(msg.content)
+                          }}
+                          title={t('ai.editMessage')}
+                        >
+                          <Pencil className="w-3 h-3" />
+                          {t('ai.edit')}
+                        </button>
+                        <button
+                          className="h-[22px] px-2 flex items-center gap-1 rounded border-none bg-transparent text-[var(--ink-mute)] hover:text-[var(--error)] hover:bg-[var(--canvas-elevated)] cursor-pointer text-[11px]"
+                          onClick={() => handleDeleteMessage(msg.id)}
+                          title={t('ai.deleteMessage')}
+                        >
+                          <Trash2 className="w-3 h-3" />
+                          {t('ai.delete')}
+                        </button>
+                      </div>
+                    </>
                   )}
-                  <MarkdownContent content={msg.content} />
                 </div>
               )}
             </div>
@@ -728,11 +878,17 @@ export function AIPanel() {
           <textarea
             id="ai-chat-input"
             name="ai-chat-input"
-            className="flex-1 bg-transparent border-none outline-none resize-none font-sans text-[13px] text-[var(--ink)] leading-[1.5] max-h-20 min-h-5"
+            ref={inputRef}
+            className="flex-1 bg-transparent border-none outline-none resize-none font-sans text-[13px] text-[var(--ink)] leading-[1.5] max-h-40 min-h-5 custom-scrollbar"
             placeholder={mode === 'collab' ? t('ai.placeholderCollab') : t('ai.placeholderWriting')}
             rows={1}
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(e) => {
+              setInput(e.target.value)
+              const el = e.target
+              el.style.height = 'auto'
+              el.style.height = `${el.scrollHeight}px`
+            }}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                 e.preventDefault()

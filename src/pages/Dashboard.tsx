@@ -11,15 +11,17 @@ import {
   Library,
   List,
   PenLine,
+  Plus,
   ScrollText,
   Swords,
   Users,
   Waypoints,
+  X,
 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useDataRefresh } from '@/hooks/useDataRefresh'
 import { useT } from '@/hooks/useT'
-import { statsApi } from '@/lib/api'
+import { projectsApi, statsApi } from '@/lib/api'
 import { useProjectName, useStats } from '@/lib/useProjectData'
 import { useProjectStore } from '@/stores/useProjectStore'
 import { useSidebarStore } from '@/stores/useSidebarStore'
@@ -71,6 +73,8 @@ export function Dashboard() {
   const loadPhase = useProjectStore((s) => s.loadPhase)
   const [advancing, setAdvancing] = useState(false)
   const [confirmPhase, setConfirmPhase] = useState<string | null>(null)
+  const [addingGenre, setAddingGenre] = useState(false)
+  const [newGenre, setNewGenre] = useState('')
 
   useEffect(() => {
     if (project) loadPhase(project)
@@ -103,6 +107,29 @@ export function Dashboard() {
     if (!project || !confirmPhase) return
     await setPhase(project, confirmPhase as any)
     setConfirmPhase(null)
+  }
+
+  // ── Genre add/remove ──
+  const handleAddGenre = async (genre: string) => {
+    if (!project || !genre) return
+    try {
+      await projectsApi.addGenre(project, genre)
+      reloadStats()
+    } catch {
+      /* ignore */
+    }
+    setAddingGenre(false)
+    setNewGenre('')
+  }
+
+  const handleRemoveGenre = async (genre: string) => {
+    if (!project) return
+    try {
+      await projectsApi.removeGenre(project, genre)
+      reloadStats()
+    } catch {
+      /* ignore */
+    }
   }
 
   // ── Target words editing ──
@@ -321,15 +348,54 @@ export function Dashboard() {
                 return (
                   <span
                     key={g}
-                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[12px] font-medium"
+                    className="inline-flex items-center gap-1 pl-2.5 pr-1.5 py-1 rounded-full text-[12px] font-medium group"
                     style={{ background: `${info.color}18`, color: info.color, border: `1px solid ${info.color}40` }}
                   >
                     {GENRE_LABELS[g] ? t(info.labelKey) : g}
+                    <button
+                      className="w-3.5 h-3.5 flex items-center justify-center rounded-full border-none bg-transparent cursor-pointer opacity-50 hover:opacity-100 hover:bg-black/10 transition-opacity"
+                      style={{ color: info.color }}
+                      onClick={() => handleRemoveGenre(g)}
+                      title={t('dashboard.removeGenre')}
+                    >
+                      <X className="w-2.5 h-2.5" />
+                    </button>
                   </span>
                 )
               })
             ) : (
               <span className="text-[13px] text-[var(--ink-tertiary)]">{t('dashboard.notSet')}</span>
+            )}
+            {addingGenre ? (
+              <select
+                id="dashboard-add-genre"
+                name="dashboard-add-genre"
+                className="h-[26px] px-2 rounded-full text-[12px] border border-[var(--hairline)] bg-[var(--canvas-elevated)] text-[var(--ink)] outline-none cursor-pointer focus:border-[var(--accent-gold)]"
+                value={newGenre}
+                autoFocus
+                onChange={(e) => handleAddGenre(e.target.value)}
+                onBlur={() => setAddingGenre(false)}
+              >
+                <option value="" disabled>
+                  {t('dashboard.selectGenre')}
+                </option>
+                {Object.keys(GENRE_LABELS)
+                  .filter((g) => !(s.genres || []).includes(g))
+                  .map((g) => (
+                    <option key={g} value={g}>
+                      {t(GENRE_LABELS[g].labelKey)}
+                    </option>
+                  ))}
+              </select>
+            ) : (
+              Object.keys(GENRE_LABELS).some((g) => !(s.genres || []).includes(g)) && (
+                <button
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[12px] font-medium border border-dashed border-[var(--hairline-light)] text-[var(--ink-mute)] bg-transparent cursor-pointer hover:text-[var(--ink)] hover:border-[var(--ink-mute)] transition-colors"
+                  onClick={() => setAddingGenre(true)}
+                >
+                  <Plus className="w-3 h-3" /> {t('dashboard.addGenre')}
+                </button>
+              )
             )}
           </div>
           <div className="text-[12px] text-[var(--ink-tertiary)] mt-2.5">

@@ -1,20 +1,20 @@
 {
   "name": "Mythpen",
   "private": true,
-  "version": "0.09-TL.14",
-  "author": "Nico",
-  "license": "CC BY-NC-SA 4.0",
+  "version": "0.09-TL.18",
+  "author": "Tom13908",
+  "license": "GPL-3.0",
   "packageManager": "pnpm@10.10.0",
   "pnpm": {},
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/niyongsheng/mythpen.git"
+    "url": "git+https://github.com/Tom13908/mythpen.git"
   },
   "bugs": {
-    "url": "https://github.com/niyongsheng/mythpen/issues"
+    "url": "https://github.com/Tom13908/mythpen/issues"
   },
-  "homepage": "https://github.com/niyongsheng/mythpen#readme",
+  "homepage": "https://github.com/Tom13908/mythpen#readme",
   "scripts": {
     "dev": "vite",
     "seed": "node server/seed.js",

@@ -21,6 +21,31 @@ function detectProvider(model, apiType) {
   return 'openai';
 }
 
+// ─── Sampling parameter helpers ───
+// 黄金规则：用户未显式设置采样参数时不发送该字段，让上游使用自己的默认值。
+// 原因：部分中转站/小众网关对未知或多余字段校验严格（返回 400），
+// 少发字段是最安全的跨供应商兼容策略。
+// 协议级硬钳制：OpenAI 系 temperature 0-2，Claude 0-1；top_p 各协议均为 0-1。
+
+const SAMPLING_LIMITS = {
+  claude: { temperatureMax: 1 },
+  'openai': { temperatureMax: 2 },
+  'openai-response': { temperatureMax: 2 },
+};
+
+function clampSampling(provider, sampling) {
+  if (!sampling) return undefined;
+  const limits = SAMPLING_LIMITS[provider] || SAMPLING_LIMITS.openai;
+  const clamped = {};
+  if (typeof sampling.temperature === 'number') {
+    clamped.temperature = Math.max(0, Math.min(limits.temperatureMax, sampling.temperature));
+  }
+  if (typeof sampling.topP === 'number') {
+    clamped.topP = Math.max(0, Math.min(1, sampling.topP));
+  }
+  return clamped;
+}
+
 // ─── Tool format conversion ───
 // OpenAI: { type: 'function', function: { name, description, parameters } }
 // Claude: { name, description, input_schema }
@@ -154,17 +179,20 @@ class OpenAIProvider {
   /**
    * Non-streaming chat completion (supports tools).
    * Used by the tool-call loop in /api/ai/chat/stream.
+   * sampling: { temperature?, topP? } — 未设置的字段不发送（黄金规则）
    */
-  async complete(systemPrompt, messages, tools, temperature) {
+  async complete(systemPrompt, messages, tools, sampling) {
     const { apiConfig } = this;
+    const s = clampSampling('openai', sampling);
     const body = {
       model: apiConfig.apiModel,
       messages: [{ role: 'system', content: systemPrompt }, ...messages],
       tools: tools || undefined,
-      temperature: temperature ?? 0.8,
       max_tokens: apiConfig.maxOutputTokens || 4096,
       stream: false,
     };
+    if (s?.temperature !== undefined) body.temperature = s.temperature;
+    if (s?.topP !== undefined) body.top_p = s.topP;
 
     const response = await fetch(apiConfig.chatUrl, {
       method: 'POST',
@@ -207,15 +235,17 @@ class OpenAIProvider {
    * Streaming chat completion (no tools).
    * Used by /api/ai/continue.
    */
-  async *stream(systemPrompt, messages, temperature) {
+  async *stream(systemPrompt, messages, sampling) {
     const { apiConfig } = this;
+    const s = clampSampling('openai', sampling);
     const body = {
       model: apiConfig.apiModel,
       messages: [{ role: 'system', content: systemPrompt }, ...messages],
-      temperature: temperature ?? 0.85,
       max_tokens: apiConfig.maxOutputTokens || 4096,
       stream: true,
     };
+    if (s?.temperature !== undefined) body.temperature = s.temperature;
+    if (s?.topP !== undefined) body.top_p = s.topP;
 
     const response = await fetch(apiConfig.chatUrl, {
       method: 'POST',
@@ -296,18 +326,21 @@ class OpenAIResponsesProvider {
    * Non-streaming completion (supports tools).
    * Used by the tool-call loop in /api/ai/chat/stream.
    */
-  async complete(systemPrompt, messages, tools, temperature) {
+  async complete(systemPrompt, messages, tools, sampling) {
     const { apiConfig } = this;
-    const data = await this.post({
+    const s = clampSampling('openai-response', sampling);
+    const reqBody = {
       model: apiConfig.apiModel,
       instructions: systemPrompt,
       input: toResponsesInput(messages),
       tools: toResponsesTools(tools),
-      temperature: temperature ?? 0.8,
       max_output_tokens: apiConfig.maxOutputTokens || 4096,
       store: false,
       stream: false,
-    });
+    };
+    if (s?.temperature !== undefined) reqBody.temperature = s.temperature;
+    if (s?.topP !== undefined) reqBody.top_p = s.topP;
+    const data = await this.post(reqBody);
 
     const { content, toolCalls } = fromResponsesOutput(data);
     const inputTokens = data.usage?.input_tokens || 0;
@@ -319,20 +352,23 @@ class OpenAIResponsesProvider {
    * Streaming completion (no tools).
    * Used by /api/ai/continue.
    */
-  async *stream(systemPrompt, messages, temperature) {
+  async *stream(systemPrompt, messages, sampling) {
     const { apiConfig } = this;
+    const s = clampSampling('openai-response', sampling);
+    const reqBody = {
+      model: apiConfig.apiModel,
+      instructions: systemPrompt,
+      input: toResponsesInput(messages),
+      max_output_tokens: apiConfig.maxOutputTokens || 4096,
+      store: false,
+      stream: true,
+    };
+    if (s?.temperature !== undefined) reqBody.temperature = s.temperature;
+    if (s?.topP !== undefined) reqBody.top_p = s.topP;
     const response = await fetch(apiConfig.responsesUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiConfig.apiKey}` },
-      body: JSON.stringify({
-        model: apiConfig.apiModel,
-        instructions: systemPrompt,
-        input: toResponsesInput(messages),
-        temperature: temperature ?? 0.85,
-        max_output_tokens: apiConfig.maxOutputTokens || 4096,
-        store: false,
-        stream: true,
-      }),
+      body: JSON.stringify(reqBody),
     });
 
     if (!response.ok) {
@@ -401,16 +437,18 @@ class ClaudeProvider {
   /**
    * Non-streaming chat completion (supports tools).
    */
-  async complete(systemPrompt, messages, tools, temperature) {
+  async complete(systemPrompt, messages, tools, sampling) {
     const { apiConfig, client } = this;
+    const s = clampSampling('claude', sampling) || {};
 
     const params = {
       model: apiConfig.apiModel,
       system: systemPrompt,
       messages: toClaudeMessages(messages),
       max_tokens: apiConfig.maxOutputTokens || 4096,
-      temperature: temperature ?? 0.8,
     };
+    if (s.temperature !== undefined) params.temperature = s.temperature;
+    if (s.topP !== undefined) params.top_p = s.topP;
 
     if (tools && tools.length > 0) {
       params.tools = toClaudeTools(tools);
@@ -437,16 +475,20 @@ class ClaudeProvider {
   /**
    * Streaming chat completion (no tools).
    */
-  async *stream(systemPrompt, messages, temperature) {
+  async *stream(systemPrompt, messages, sampling) {
     const { apiConfig, client } = this;
+    const s = clampSampling('claude', sampling) || {};
 
-    const stream = client.messages.stream({
+    const streamParams = {
       model: apiConfig.apiModel,
       system: systemPrompt,
       messages: toClaudeMessages(messages),
       max_tokens: apiConfig.maxOutputTokens || 4096,
-      temperature: temperature ?? 0.85,
-    });
+    };
+    if (s.temperature !== undefined) streamParams.temperature = s.temperature;
+    if (s.topP !== undefined) streamParams.top_p = s.topP;
+
+    const stream = client.messages.stream(streamParams);
 
     let inputTokens = 0;
     let outputTokens = 0;
@@ -515,6 +557,8 @@ module.exports = {
   OpenAIResponsesProvider,
   ClaudeProvider,
   detectProvider,
+  clampSampling,
+  SAMPLING_LIMITS,
   toResponsesInput,
   toResponsesTools,
   fromResponsesOutput,

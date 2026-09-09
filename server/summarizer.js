@@ -112,7 +112,7 @@ async function runSummary(projectName, chapterNum) {
   const userPrompt = `## 章节正文（第${chapterNum}章「${chapter.title}」）\n\n${body}\n\n## 现有角色\n${chars.join('、') || '（无）'}\n\n## 现有伏笔\n${foreshadows.join('、') || '（无）'}`;
 
   const adapter = createAIAdapter(aiConfig.apiModel, aiConfig, aiConfig.apiType);
-  const result = await adapter.complete(SUMMARY_PROMPT, [{ role: 'user', content: userPrompt }], null, 0.2);
+  const result = await adapter.complete(SUMMARY_PROMPT, [{ role: 'user', content: userPrompt }], null, { temperature: 0.2 });
   if (!result.content) {
     throw new Error('AI 未返回内容');
   }

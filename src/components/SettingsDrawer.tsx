@@ -1,8 +1,9 @@
-import { Bot, Eye, EyeOff, Globe, Palette, Pen, Plus, RotateCw, SwatchBook, X, Zap } from 'lucide-react'
+import { Bot, Eye, EyeOff, FolderOpen, Globe, Palette, Pen, Plus, RotateCw, SwatchBook, X, Zap } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useT } from '@/hooks/useT'
+import { modelsApi, storageApi } from '@/lib/api'
 import { refreshAllData } from '@/lib/dataEvents'
-import { modelsApi } from '@/lib/api'
+import { modelSamplingHint, samplingRange, toppProbeLabel } from '@/lib/sampling'
 import { useEditorStore } from '@/stores/useEditorStore'
 import { useSettingsStore } from '@/stores/useSettingsStore'
 import { useUIStore } from '@/stores/useUIStore'
@@ -15,6 +16,44 @@ function applyAccentColor(color: string) {
   document.documentElement.style.setProperty('--accent-gold', color)
   // The soft variant: lighten by adjusting transparency
   document.documentElement.style.setProperty('--accent-gold-soft', color + 'cc')
+}
+
+/**
+ * 已知模型名关键词 → 上下文窗口（tokens）的预设映射。
+ * 按数组顺序匹配（更精确/更新的规则放前面），命中第一条即返回。
+ */
+const MODEL_CONTEXT_PRESETS: Array<{ pattern: RegExp; contextLimit: number }> = [
+  { pattern: /deepseek-v4/i, contextLimit: 1_000_000 },
+  { pattern: /deepseek-v3\.2/i, contextLimit: 1_000_000 },
+  { pattern: /deepseek/i, contextLimit: 128_000 },
+  { pattern: /claude-.*(opus|sonnet|haiku)-4/i, contextLimit: 1_000_000 },
+  { pattern: /claude-3/i, contextLimit: 200_000 },
+  { pattern: /claude/i, contextLimit: 200_000 },
+  { pattern: /gpt-4\.1/i, contextLimit: 1_000_000 },
+  { pattern: /gpt-5/i, contextLimit: 400_000 },
+  { pattern: /gpt-4o/i, contextLimit: 128_000 },
+  { pattern: /gpt-4-turbo/i, contextLimit: 128_000 },
+  { pattern: /^gpt-4$|gpt-4-\d{4}/i, contextLimit: 8_192 },
+  { pattern: /o1|o3|o4/i, contextLimit: 200_000 },
+  { pattern: /gemini-.*2\.5/i, contextLimit: 1_000_000 },
+  { pattern: /gemini/i, contextLimit: 1_000_000 },
+  { pattern: /qwen.*(long|plus|max)/i, contextLimit: 1_000_000 },
+  { pattern: /qwen/i, contextLimit: 128_000 },
+  { pattern: /glm-4\.6|glm-4\.5/i, contextLimit: 128_000 },
+  { pattern: /kimi|moonshot/i, contextLimit: 256_000 },
+  { pattern: /grok/i, contextLimit: 128_000 },
+  { pattern: /llama-3\.1|llama-3\.2|llama-3\.3/i, contextLimit: 128_000 },
+  { pattern: /mistral-large/i, contextLimit: 128_000 },
+]
+
+/** 根据模型名猜测对应的上下文窗口大小，未命中任何预设时返回 null。 */
+function guessContextLimit(model: string): number | null {
+  const name = model.trim()
+  if (!name) return null
+  for (const preset of MODEL_CONTEXT_PRESETS) {
+    if (preset.pattern.test(name)) return preset.contextLimit
+  }
+  return null
 }
 
 export function SettingsDrawer() {
@@ -39,12 +78,42 @@ export function SettingsDrawer() {
   const [modelList, setModelList] = useState<string[]>([])
   const [modelsStatus, setModelsStatus] = useState<'idle' | 'fetching' | 'ok' | 'fail'>('idle')
   const [modelsMsg, setModelsMsg] = useState('')
+  const [storageInfo, setStorageInfo] = useState<{ currentDir: string; isDefault: boolean } | null>(null)
+  const [editingStorage, setEditingStorage] = useState(false)
+  const [storagePathInput, setStoragePathInput] = useState('')
+  const [migrating, setMigrating] = useState(false)
+  const [migrateMsg, setMigrateMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+
+  useEffect(() => {
+    storageApi
+      .get()
+      .then(setStorageInfo)
+      .catch(() => {})
+  }, [])
 
   const active = providers.find((p) => p.id === activeProviderId) || providers[0]
+
+  // 采样参数：协议范围、模型族提示、探针结果文案
+  const range = samplingRange(active?.type)
+  const samplingHint = active ? modelSamplingHint(active.model) : ''
+  const probeLabel = active ? toppProbeLabel(active.toppSupported) : ''
+  // 未设置时滑块显示在协议中点，但档案值保持 undefined（黄金规则：不发送）
+  const defaultSliderPos = active?.type === 'claude' ? 0.5 : 1
 
   useEffect(() => {
     if (!providersLoaded) loadProviders()
   }, [providersLoaded, loadProviders])
+
+  /** 切换模型时，如命中已知模型的上下文窗口预设，则一并自动更新 contextLimit。 */
+  const handleModelChange = (model: string) => {
+    if (!active) return
+    const guessed = guessContextLimit(model)
+    if (guessed && guessed !== active.contextLimit) {
+      updateProvider(active.id, { model, contextLimit: guessed })
+    } else {
+      updateProvider(active.id, { model })
+    }
+  }
 
   const handleFetchModels = async () => {
     if (!active) return
@@ -83,6 +152,8 @@ export function SettingsDrawer() {
       setTestTime(ms)
       if (res.ok) {
         setTestStatus('ok')
+        // 探针：测试连接成功后实测供应商对 top_p 的支持（结果写入档案供 UI 提示）
+        runProbe()
       } else {
         setTestStatus('fail')
         try {
@@ -96,6 +167,28 @@ export function SettingsDrawer() {
       setTestTime(Date.now() - start)
       setTestStatus('fail')
       setTestError(err.message || 'Network error')
+    }
+  }
+
+  /** 探针：实测当前档案供应商是否接受 top_p（结果写入 toppSupported）。 */
+  const runProbe = async () => {
+    if (!active) return
+    try {
+      const { request } = await import('@/lib/api')
+      const result = await request('/ai/probe-sampling', {
+        method: 'POST',
+        body: {
+          baseUrl: active.baseUrl,
+          apiKey: active.apiKey,
+          model: active.model,
+          type: active.type,
+        },
+      })
+      if (result.toppSupported !== null) {
+        updateProvider(active.id, { toppSupported: result.toppSupported })
+      }
+    } catch {
+      // 探针失败不影响测试连接结果，静默保留"未探测"状态
     }
   }
 
@@ -115,6 +208,33 @@ export function SettingsDrawer() {
   const handleFontFamilyChange = (family: string) => {
     updateSetting('editorFontFamily', family)
     useEditorStore.getState().setFontFamily(family)
+  }
+
+  const startEditStorage = () => {
+    setStoragePathInput(storageInfo?.currentDir || '')
+    setMigrateMsg(null)
+    setEditingStorage(true)
+  }
+
+  const cancelEditStorage = () => {
+    setEditingStorage(false)
+    setMigrateMsg(null)
+  }
+
+  const handleMigrateStorage = async () => {
+    const target = storagePathInput.trim()
+    if (!target) return
+    setMigrating(true)
+    setMigrateMsg(null)
+    try {
+      const result = await storageApi.migrate(target)
+      setStorageInfo({ currentDir: result.newDir, isDefault: false })
+      setEditingStorage(false)
+      setMigrateMsg({ type: 'success', text: t('settings.storageMigrateSuccess', { oldDir: result.oldDir }) })
+    } catch (err: any) {
+      setMigrateMsg({ type: 'error', text: err.message || t('settings.storageMigrateFailed') })
+    }
+    setMigrating(false)
   }
 
   return (
@@ -157,6 +277,72 @@ export function SettingsDrawer() {
                 </button>
               </div>
             </SettingRow>
+          </div>
+
+          {/* ── Storage location ── */}
+          <div className="mb-7">
+            <div className="text-[11px] font-medium text-[var(--ink-mute)] tracking-[0.06em] uppercase mb-3">
+              <FolderOpen className="w-3.5 h-3.5 inline-block mr-1" /> {t('settings.storageLocation')}
+            </div>
+            <div className="py-2.5 border-t border-[var(--hairline)]">
+              <div className="text-[13px] text-[var(--ink)] mb-1">{t('settings.storageLocation')}</div>
+              <div className="text-[12px] text-[var(--ink-tertiary)] mb-2.5">{t('settings.storageLocationDesc')}</div>
+              <div className="flex flex-col gap-2 items-stretch w-full">
+                {!editingStorage ? (
+                  <div className="flex items-center gap-2">
+                    <span
+                      className="flex-1 text-[12px] text-[var(--ink-secondary)] truncate"
+                      title={storageInfo?.currentDir}
+                    >
+                      {storageInfo?.currentDir || '…'}
+                    </span>
+                    <button
+                      className="px-2.5 py-1 rounded-[var(--radius-sm)] border border-[var(--hairline)] text-[12px] bg-[var(--canvas-elevated)] text-[var(--ink-secondary)] cursor-pointer hover:bg-[var(--canvas-mid)] transition-colors shrink-0"
+                      onClick={startEditStorage}
+                    >
+                      {t('settings.storageChange')}
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-2">
+                    <input
+                      className="form-input h-[28px] text-[12px]"
+                      value={storagePathInput}
+                      onChange={(e) => setStoragePathInput(e.target.value)}
+                      placeholder={t('settings.storagePathPlaceholder')}
+                      autoFocus
+                      disabled={migrating}
+                    />
+                    <div className="flex items-center gap-2 justify-end">
+                      <button
+                        className="px-2.5 py-1 rounded-[var(--radius-sm)] border border-[var(--hairline)] text-[12px] bg-[var(--canvas-elevated)] text-[var(--ink-secondary)] cursor-pointer hover:bg-[var(--canvas-mid)] transition-colors"
+                        onClick={cancelEditStorage}
+                        disabled={migrating}
+                      >
+                        {t('common.cancel')}
+                      </button>
+                      <button
+                        className="px-2.5 py-1 rounded-[var(--radius-sm)] border border-[var(--accent-gold)] text-[12px] bg-[var(--accent-gold)] text-[var(--canvas)] font-medium cursor-pointer hover:opacity-90 transition-opacity disabled:opacity-50"
+                        onClick={handleMigrateStorage}
+                        disabled={migrating || !storagePathInput.trim()}
+                      >
+                        {migrating ? t('settings.storageMigrating') : t('settings.storageConfirm')}
+                      </button>
+                    </div>
+                    <p className="text-[11px] text-[var(--ink-tertiary)] leading-relaxed">
+                      {t('settings.storageRestartHint')}
+                    </p>
+                  </div>
+                )}
+                {migrateMsg && (
+                  <p
+                    className={`text-[11px] leading-relaxed ${migrateMsg.type === 'success' ? 'text-[var(--success)]' : 'text-[var(--error)]'}`}
+                  >
+                    {migrateMsg.text}
+                  </p>
+                )}
+              </div>
+            </div>
           </div>
 
           {/* ── Theme ── */}
@@ -363,7 +549,7 @@ export function SettingsDrawer() {
                       type="text"
                       className="h-[30px] px-2 bg-[var(--canvas-elevated)] border border-[var(--hairline)] rounded-[var(--radius-sm)] text-[var(--ink)] text-[12px] font-mono outline-none focus:border-[var(--accent-gold)] w-[160px]"
                       value={active.model}
-                      onChange={(e) => updateProvider(active.id, { model: e.target.value })}
+                      onChange={(e) => handleModelChange(e.target.value)}
                       placeholder="deepseek-v4-flash"
                     />
                     <button
@@ -384,7 +570,7 @@ export function SettingsDrawer() {
                     <select
                       className="h-[30px] px-2 bg-[var(--canvas-elevated)] border border-[var(--hairline)] rounded-[var(--radius-sm)] text-[var(--ink)] text-[12px] font-mono outline-none cursor-pointer focus:border-[var(--accent-gold)] w-[200px]"
                       value={active.model}
-                      onChange={(e) => updateProvider(active.id, { model: e.target.value })}
+                      onChange={(e) => handleModelChange(e.target.value)}
                     >
                       {modelList.map((m) => (
                         <option key={m} value={m}>
@@ -454,6 +640,68 @@ export function SettingsDrawer() {
                       }}
                     />
                     <span className="text-[11px] text-[var(--ink-mute)]">字/章</span>
+                  </div>
+                </SettingRow>
+                {/* ─── 采样参数（temperature / top_p）─── */}
+                <SettingRow
+                  label={t('settings.temperature')}
+                  desc={samplingHint ? samplingHint : t('settings.temperatureDesc', { max: range.temperatureMax })}
+                >
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="range"
+                      className="w-[110px] accent-[var(--accent-gold)]"
+                      min={0}
+                      max={range.temperatureMax}
+                      step={0.05}
+                      value={active.temperature ?? defaultSliderPos}
+                      onChange={(e) => updateProvider(active.id, { temperature: parseFloat(e.target.value) })}
+                    />
+                    <span className="text-[12px] text-[var(--ink)] font-mono w-[34px] text-right">
+                      {active.temperature !== undefined ? active.temperature.toFixed(2) : t('settings.samplingDefault')}
+                    </span>
+                    {active.temperature !== undefined && (
+                      <button
+                        className="w-5 h-5 flex items-center justify-center rounded-[var(--radius-sm)] border-none bg-none text-[var(--ink-tertiary)] cursor-pointer hover:text-[var(--ink)] transition-colors shrink-0 text-[13px] leading-none"
+                        onClick={() => updateProvider(active.id, { temperature: undefined })}
+                        title={t('settings.samplingClear')}
+                      >
+                        ×
+                      </button>
+                    )}
+                  </div>
+                </SettingRow>
+                <SettingRow
+                  label={t('settings.topP')}
+                  desc={
+                    active.toppSupported === false
+                      ? t('settings.topPUnsupported')
+                      : t('settings.topPDesc') + (probeLabel ? `（${probeLabel}）` : '')
+                  }
+                >
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="range"
+                      className="w-[110px] accent-[var(--accent-gold)] disabled:opacity-40"
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      disabled={active.toppSupported === false}
+                      value={active.topP ?? defaultSliderPos}
+                      onChange={(e) => updateProvider(active.id, { topP: parseFloat(e.target.value) })}
+                    />
+                    <span className="text-[12px] text-[var(--ink)] font-mono w-[34px] text-right">
+                      {active.topP !== undefined ? active.topP.toFixed(2) : t('settings.samplingDefault')}
+                    </span>
+                    {active.topP !== undefined && (
+                      <button
+                        className="w-5 h-5 flex items-center justify-center rounded-[var(--radius-sm)] border-none bg-none text-[var(--ink-tertiary)] cursor-pointer hover:text-[var(--ink)] transition-colors shrink-0 text-[13px] leading-none"
+                        onClick={() => updateProvider(active.id, { topP: undefined })}
+                        title={t('settings.samplingClear')}
+                      >
+                        ×
+                      </button>
+                    )}
                   </div>
                 </SettingRow>
               </>
