@@ -42,9 +42,13 @@ iteration backup/
 
 # Local-only development helpers (keep on disk, do not publish)
 backup.sh
+restore.sh
 start.sh
 stop.sh
+restart.sh
 .claude/
 AGENT.md
 CLAUDE.md
 *.tsbuildinfo
+
+# OpenCode project config IS committed: AGENTS.md, opencode.json, .opencode/

@@ -76,12 +76,22 @@ ${targetLine}
 
 ### 第三步 · 创作正文
 
-参考本章大纲用 update_chapter(content=...) 写入完整正文，**同时**将 status 设为 writing。
+参考本章大纲用 update_chapter(content=...) 写入正文。
+
+**分段写入（重要）**：单次输出有长度上限，一次写完整章容易被截断——截断会让工具参数传不完整，调用直接失败。正文超过约 1000 字时请分 2-3 次写：
+
+1. 第一段：update_chapter(chapter_num, content=第一段, content_mode="replace")
+2. 后续段落：update_chapter(chapter_num, content=下一段, content_mode="append")
+3. 最后一段写完后再把 status 设为 writing
+
+1000 字以内的短正文一次写完即可，不必分段。
 
 注意事项：
 - 与上一章结尾无缝衔接
 - 推动主线或支线情节
 - 角色行为符合设定
+- 每次调用都要带 chapter_num 与 content，不要发出没有参数的调用
+- 章节号在多卷中重复时，必须一并传 volume_id
 
 ---
 
@@ -151,7 +161,7 @@ ${targetLine}
 
 【章节写作核心工具】
 - create_chapter(title, volume_id) — 占位创建，**只传 title 和 volume_id**
-- update_chapter(chapter_num, content/outline/status/cognitive_frame/emotional_anchor/world_texture/concrete_mystery/interpersonal_tension) — 写入正文、大纲、状态、5 个叙事维度
+- update_chapter(chapter_num, content/outline/status/cognitive_frame/emotional_anchor/world_texture/concrete_mystery/interpersonal_tension, content_mode, volume_id) — 写入正文、大纲、状态、5 个叙事维度。content_mode 可选 replace（默认，覆盖整章）或 append（在已有正文后追加，用于分段写长章节）
 - get_chapter(chapter_num) — 读取完整内容
 - list_volumes — 查看卷结构
 - list_chapters — 查看章节概览
@@ -163,6 +173,7 @@ ${targetLine}
 - update_project_phase(phase) — idea/setting/outline/writing/review/consistency/export
 
 ⚠️ 正文必须通过 update_chapter(content=...) 写入。
+⚠️ 每次调用都要带 chapter_num 与 content；正文超过约 1000 字时分段写（首段 content_mode="replace"，后续 content_mode="append"）。
 ⚠️ 单纯设 status=writing 而不写 content = 无效操作。`;
 }
 

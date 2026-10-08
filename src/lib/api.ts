@@ -158,6 +158,10 @@ export const memoriesApi = {
   list: (project: string) => request(`/${encodeURIComponent(project)}/memories`),
   create: (project: string, data: any) =>
     request(`/${encodeURIComponent(project)}/memories`, { method: 'POST', body: data }),
+  update: (project: string, id: string, data: any) =>
+    request(`/${encodeURIComponent(project)}/memories/${id}`, { method: 'PUT', body: data }),
+  delete: (project: string, id: string) =>
+    request(`/${encodeURIComponent(project)}/memories/${id}`, { method: 'DELETE' }),
   search: (project: string, query: string) =>
     request(`/${encodeURIComponent(project)}/memories/search`, { method: 'POST', body: { query } }),
 }
@@ -168,6 +172,10 @@ export const timelineApi = {
   list: (project: string) => request(`/${encodeURIComponent(project)}/timeline`),
   create: (project: string, data: any) =>
     request(`/${encodeURIComponent(project)}/timeline`, { method: 'POST', body: data }),
+  update: (project: string, id: string, data: any) =>
+    request(`/${encodeURIComponent(project)}/timeline/${id}`, { method: 'PUT', body: data }),
+  delete: (project: string, id: string) =>
+    request(`/${encodeURIComponent(project)}/timeline/${id}`, { method: 'DELETE' }),
 }
 
 // ─── Stats ───
@@ -177,6 +185,31 @@ export const statsApi = {
   updateTargetWords: (project: string, targetWords: number) =>
     request(`/${encodeURIComponent(project)}/target-words`, { method: 'PUT', body: { targetWords } }),
   resetTargetWords: (project: string) => request(`/${encodeURIComponent(project)}/target-words`, { method: 'DELETE' }),
+}
+
+// ─── 里程碑快照 ───
+//
+// 把项目库在某一刻的整份状态留下来，之后可以整份还原。
+// 主要场景是「AI 共创开局不合意」：共创会把设定直接写进库里，而模型每轮都会读到
+// 库里已有的元素，所以只在会话里重试是没用的 —— 必须把库本身退回去。
+
+export const snapshotsApi = {
+  list: (project: string): Promise<{ snapshots: import('@/types').SnapshotMeta[]; totalBytes: number }> =>
+    request(`/${encodeURIComponent(project)}/snapshots`),
+
+  /** kind='initial' 只在建立初始状态时用，后端会保证一个项目只留一份。 */
+  create: (project: string, label: string, kind?: 'manual' | 'initial') =>
+    request(`/${encodeURIComponent(project)}/snapshots`, { method: 'POST', body: { label, kind } }),
+
+  /** 还原前后端会自动给当前状态打一份 safety 快照，返回体里带着它，用于提示用户「还能退回来」。 */
+  restore: (project: string, id: string, safetyLabel?: string) =>
+    request(`/${encodeURIComponent(project)}/snapshots/${encodeURIComponent(id)}/restore`, {
+      method: 'POST',
+      body: { safetyLabel },
+    }),
+
+  remove: (project: string, id: string) =>
+    request(`/${encodeURIComponent(project)}/snapshots/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 }
 
 // ─── Settings ───
@@ -258,6 +291,7 @@ export const aiApi = {
     onToolCall?: (tc: any) => void,
     onToolResult?: (tr: any) => void,
     onProgress?: (p: any) => void,
+    onReasoning?: (r: any) => void,
   ) => {
     const controller = new AbortController()
     fetch(`${API_BASE}/ai/chat/stream`, {
@@ -273,6 +307,7 @@ export const aiApi = {
           tool_call: (data) => onToolCall?.(data),
           tool_result: (data) => onToolResult?.(data),
           progress: (data) => onProgress?.(data),
+          reasoning_chunk: (data) => onReasoning?.(data),
           error: (data) => {
             gotError = true
             onError(data)

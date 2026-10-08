@@ -39,7 +39,7 @@ Based on [niyongsheng/mythpen](https://github.com/niyongsheng/mythpen) v0.0.9. T
 ## AI provider system
 
 - Multiple provider profiles with one-click switching
-- Three protocols: OpenAI chat/completions, OpenAI Responses, Anthropic Claude Messages
+- Four protocols: OpenAI chat/completions, OpenAI Responses, Anthropic Claude Messages, Google Gemini (generateContent)
 - Relay-friendly: auto-append `/v1`, proxied model list, mismatch hints (e.g. DeepSeek model + Anthropic type)
 - Sampling controls: `temperature` / `top_p` with a four-layer compatibility strategy (omit unset params → protocol clamp → model-family hints → upstream 400 feedback)
 - Token usage recorded per call

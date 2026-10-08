@@ -80,6 +80,13 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       // 项目已经被切走 — 这是过期响应，丢弃，不能覆盖当前项目的 sessions
       if (get()._sessionsRequestProject !== project) return
       set({ sessions })
+      // 选中的会话已经不在列表里 → 必须清掉。整库还原会把会话一起退回去，
+      // 此时 currentSessionId 仍指向一个已不存在的会话；继续沿用它发送消息会把
+      // 新消息写到一个不存在的 session_id 上。
+      const selected = get().currentSessionId
+      if (selected && !sessions.some((s: any) => s.id === selected)) {
+        set({ currentSessionId: null, messages: [] })
+      }
       // Auto-select first session if none selected (AIPanel will load messages)
       if (!get().currentSessionId && sessions.length > 0) {
         set({ currentSessionId: sessions[0].id })

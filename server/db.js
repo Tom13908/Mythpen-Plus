@@ -30,6 +30,10 @@ const DB_DIR = _resolveDbDir();
 const CONFIG_DB = path.join(DB_DIR, 'config.db');
 const PROJECTS_DIR = path.join(DB_DIR, 'projects');
 const EXPORTS_DIR = path.join(DB_DIR, 'exports');
+// 里程碑快照：<DB_DIR>/snapshots/<project>/<snapshotId>/{db.mythpen.db,meta.json,cover.*}
+// 与 projects/ 平级而不在其内部 —— projects/ 会被按 *.mythpen.db 扫描列举，
+// 快照放进去可能被当成项目库。
+const SNAPSHOTS_DIR = path.join(DB_DIR, 'snapshots');
 
 // ─── Ensure directories ───
 if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
@@ -43,15 +47,27 @@ let configDb;    // wrapped config database
 // ═══════════════════════════════════════════════════════════════
 
 const CONFIG_SCHEMA_VERSION = 1;
-const PROJECT_SCHEMA_VERSION = 3;
+const PROJECT_SCHEMA_VERSION = 4;
 
 // ═══════════════════════════════════════════════════════════════
 // sql.js wrapper — provides a better-sqlite3-compatible API
 // ═══════════════════════════════════════════════════════════════
 
+const SQLITE_HEADER = 'SQLite format 3\u0000';
+
 function _loadDb(filePath) {
   if (fs.existsSync(filePath)) {
     const buf = fs.readFileSync(filePath);
+    // ─── 关键数据安全防线 ───
+    // 文件存在却不是有效 SQLite（0 字节 / 被截断 / 损坏）时，绝不能当成全新空库
+    // 打开：开库时的迁移写入会触发刷盘，用空 schema 覆盖原文件，用户数据被
+    // 静默销毁（2026-09-24 实际发生过）。宁可报错中止，让人介入处理。
+    if (buf.length === 0 || buf.subarray(0, 16).toString('binary') !== SQLITE_HEADER) {
+      throw new Error(
+        `[DB] 拒绝打开损坏的项目库: ${filePath}（${buf.length} 字节，缺少 SQLite 文件头）。` +
+          `文件可能已损坏，为避免被空库覆盖已中止打开。请先人工检查/恢复该文件后再启动。`,
+      );
+    }
     return new SQL.Database(buf);
   }
   return new SQL.Database();
@@ -59,7 +75,33 @@ function _loadDb(filePath) {
 
 function _flushDb(db, filePath) {
   const data = db.export();
-  fs.writeFileSync(filePath, Buffer.from(data));
+  // ─── 原子写（关键数据安全防线）───
+  // 直接 writeFileSync 会先截断原文件；进程若在写入中途被杀（如 stop.sh 的强杀、
+  // 系统断电），会留下截断文件。而 sql.js 会把截断/空文件当成"全新的空库"，
+  // 下一次打开时的迁移写入将用空 schema 覆盖原文件——用户数据被静默销毁
+  // （2026-09-24 实际发生过）。先写临时文件再 rename，保证任意时刻磁盘上
+  // 要么是完整的旧文件、要么是完整的新文件。
+  //
+  // 父目录必须先存在：项目名若含路径分隔符，这里的路径会指向一个不存在的子目录，
+  // openSync 直接 ENOENT（2026-09-25 实际发生过，整个后端进程被击穿）。名称已在
+  // 入口处校验，这里是最后一道兜底。
+  const dir = path.dirname(filePath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  const tmp = filePath + '.flush-tmp';
+  try {
+    const fd = fs.openSync(tmp, 'w');
+    try {
+      fs.writeSync(fd, Buffer.from(data));
+      fs.fsyncSync(fd); // 确保内容落盘后再替换
+    } finally {
+      fs.closeSync(fd);
+    }
+    fs.renameSync(tmp, filePath);
+  } catch (e) {
+    // 失败时不能留下半截临时文件（下次成功写入会覆盖它，但它会一直占着磁盘）
+    try { fs.unlinkSync(tmp); } catch { /* 清理失败不影响主流程 */ }
+    throw e;
+  }
 }
 
 // ─── Named-param helper ───
@@ -114,7 +156,16 @@ function _wrapDb(db, filePath) {
     if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
     if (!dirty) return;
     dirty = false;
-    _flushDb(db, filePath);
+    try {
+      _flushDb(db, filePath);
+    } catch (e) {
+      // 落盘失败绝不向调用方抛出。本函数由 setTimeout（250ms 防抖落盘）、事务提交和
+      // 进程退出钩子调用，抛出会直接击穿进程 —— 把「一个项目写不进磁盘」升级成
+      // 「整个服务不可用」（2026-09-25 实际发生过）。
+      // 数据仍在内存中未丢失，重新置脏，等下一次写入或退出时重试。
+      dirty = true;
+      console.error(`[DB] 落盘失败（数据仍在内存，未丢失）: ${filePath} — ${e.message}`);
+    }
   }
 
   function _scheduleFlush() {
@@ -197,6 +248,22 @@ function _wrapDb(db, filePath) {
     close() {
       _flushSync();
       db.close();
+    },
+
+    /** 立即把内存中的库写盘（不关闭连接）。供退出前的统一落盘使用。 */
+    flush() {
+      _flushSync();
+    },
+
+    /**
+     * 丢弃内存中的库，**不写盘**。
+     * 用于磁盘文件已被外部删除/替换的场景：此时内存里的旧库已无意义，
+     * 若走 close() 会把旧内容重新写回磁盘（等于让文件复活）。
+     */
+    discard() {
+      if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+      dirty = false;
+      try { db.close(); } catch { /* 已关闭/句柄失效都当成功 */ }
     },
   };
 }
@@ -304,7 +371,13 @@ function runMigrations(db, migrations, targetVersion, getVersionFn, setVersionFn
   let currentVersion = getVersionFn(db);
   if (currentVersion >= targetVersion) return;
   for (let v = currentVersion; v < targetVersion; v++) {
-    if (migrations[v]) migrations[v](db);
+    if (!migrations[v]) {
+      // 关键：迁移函数缺失时绝不推进版本号。
+      // 旧实现无条件 setVersion(v+1)，一旦版本号先于迁移函数被改动（例如分步编辑时
+      // nodemon 中途重启），该步骤会被永久跳过且不再重试，导致"版本已升但列不存在"。
+      throw new Error(`[DB] Missing migration for version ${v} → ${v + 1}`);
+    }
+    migrations[v](db);
     setVersionFn(db, v + 1);
   }
 }
@@ -362,11 +435,21 @@ const configMigrations = [
 
 function makeVersionGetter(tableName) {
   return (db) => {
-    db.exec(`CREATE TABLE IF NOT EXISTS ${tableName} (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
+    // 先直接读：绝大多数情况下表已存在，这条路径完全不触碰数据库。
+    // 旧写法无条件 db.exec(CREATE TABLE IF NOT EXISTS ...)，而 exec() 会让包装层
+    // 标记脏 —— 结果只是「列一次项目列表」就会把每个项目文件整库重写一遍。
     try {
       const row = db.prepare(`SELECT value FROM ${tableName} WHERE key = 'schema_version'`).get();
       return row ? parseInt(row.value, 10) || 0 : 0;
-    } catch { return 0; }
+    } catch {
+      // 表还不存在（全新库）→ 建表，按版本 0 交给迁移流程
+      try {
+        db.exec(`CREATE TABLE IF NOT EXISTS ${tableName} (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
+      } catch {
+        /* 建表失败交由后续迁移流程抛出，处理方式保持一致 */
+      }
+      return 0;
+    }
   };
 }
 
@@ -389,13 +472,89 @@ function migrateConfig(db) {
 
 const projectConnections = new Map();
 
+// ═══════════════════════════════════════════════════════════════
+// 项目名校验（入口防线）
+// ═══════════════════════════════════════════════════════════════
+// 每个项目对应 <PROJECTS_DIR>/<name>.mythpen.db。名称一旦含路径分隔符，落盘路径就被
+// 拆进不存在的子目录：第一次防抖落盘即 ENOENT，整个后端进程被击穿；而该项目的数据
+// 此时只存在于内存连接里，进程一崩即永久丢失（2026-09-25 实际发生：项目名
+// "Common Sense, Luv/Hate"）。`..` 变体还能把库文件写到 projects/ 之外。
+// 因此非法名称一律在入口拒绝，绝不交给 path.join。
+const PROJECT_NAME_MAX_LEN = 100;
+const INVALID_PROJECT_NAME_CHARS = /[\\/:*?"<>|]/; // 路径分隔符 + Windows 保留字符
+
+function validateProjectName(name) {
+  if (typeof name !== 'string') return { ok: false, message: '项目名称必须是文本' };
+  const trimmed = name.trim();
+  if (!trimmed) return { ok: false, message: '项目名称不能为空' };
+  if (trimmed.length > PROJECT_NAME_MAX_LEN) {
+    return { ok: false, message: `项目名称不能超过 ${PROJECT_NAME_MAX_LEN} 个字符` };
+  }
+  if (/^\.+$/.test(trimmed)) return { ok: false, message: '项目名称不能是 "." 或 ".."' };
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f]/.test(trimmed)) {
+    return { ok: false, message: '项目名称不能包含换行、制表符等控制字符' };
+  }
+  const hit = trimmed.match(new RegExp(INVALID_PROJECT_NAME_CHARS.source, 'g'));
+  if (hit) {
+    return { ok: false, message: `项目名称不能包含这些字符：${[...new Set(hit)].join(' ')}` };
+  }
+  return { ok: true, name: trimmed };
+}
+
+/** 校验通过返回规范化后的名称，否则抛出带 code 的错误（调用方转 400）。 */
+function assertValidProjectName(name) {
+  const v = validateProjectName(name);
+  if (!v.ok) throw Object.assign(new Error(v.message), { code: 'INVALID_PROJECT_NAME' });
+  return v.name;
+}
+
+/** 项目库所在目录（封面等附属资源也在这里按项目名建子目录）。 */
+function getProjectsDir() {
+  return PROJECTS_DIR;
+}
+
+/** 里程碑快照根目录。 */
+function getSnapshotsDir() {
+  return SNAPSHOTS_DIR;
+}
+
+/**
+ * 文件是不是一个像样的 SQLite 库（前 16 字节文件头）。
+ *
+ * 抽出来复用而不是内联在 _loadDb 里，是因为「还原快照」这条路必须先校验快照文件、
+ * **再**覆盖现役库 —— 顺序反了就是把坏文件盖到好库上，等于用一次还原销毁用户数据。
+ */
+function isValidSqliteFile(filePath) {
+  try {
+    const stat = fs.statSync(filePath);
+    if (!stat.isFile() || stat.size < 100) return false;
+    const fd = fs.openSync(filePath, 'r');
+    try {
+      const head = Buffer.alloc(16);
+      const read = fs.readSync(fd, head, 0, 16, 0);
+      return read === 16 && head.toString('binary') === SQLITE_HEADER;
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return false;
+  }
+}
+
 function getProjectDbPath(name) {
-  return path.join(PROJECTS_DIR, `${name}.mythpen.db`);
+  return path.join(PROJECTS_DIR, `${assertValidProjectName(name)}.mythpen.db`);
 }
 
 function openProjectDb(filePath) {
-  if (projectConnections.has(filePath)) {
-    return projectConnections.get(filePath);
+  const cached = projectConnections.get(filePath);
+  if (cached) {
+    // 磁盘文件还在 → 复用缓存连接。
+    // 文件已被外部删除/移走 → 丢弃内存里的旧库再重新加载：否则「重新创建同名项目」
+    // 会继承旧内存库的内容，建默认卷时直接 500（UNIQUE constraint failed: volumes.id）。
+    if (fs.existsSync(filePath)) return cached;
+    cached.discard();
+    projectConnections.delete(filePath);
   }
   const db = _loadDb(filePath);
   db.run('PRAGMA foreign_keys = ON');
@@ -409,6 +568,51 @@ function closeProjectDb(filePath) {
   if (projectConnections.has(filePath)) {
     projectConnections.get(filePath).close();
     projectConnections.delete(filePath);
+  }
+}
+
+/**
+ * 丢弃内存中的项目库连接，**不写盘**。
+ *
+ * 还原快照专用：磁盘文件马上要被快照覆盖，此时若走 closeProjectDb()，
+ * close() → _flushSync() 会把内存里的旧内容重新写回磁盘，把刚还原的结果再次覆盖掉
+ * （且因为内存里 dirty 标志的存在，这一步并不总能靠"先 flush 再还原"避免）。
+ * 必须用 discard()。
+ *
+ * 另外必须把连接从缓存里摘掉：openProjectDb() 的缓存复用条件是"磁盘文件还在"，
+ * 而还原后文件一定在，于是下一次取库会把已经不成立的旧内存库当成有效缓存返回。
+ */
+function discardProjectDb(filePath) {
+  const cached = projectConnections.get(filePath);
+  if (!cached) return false;
+  cached.discard();
+  projectConnections.delete(filePath);
+  return true;
+}
+
+/** 退出前统一落盘：把所有已打开的项目库立即写盘，避免丢最近 250ms 的写入。 */
+function flushAllProjectDbs() {
+  for (const [p, wrapped] of projectConnections) {
+    try {
+      if (typeof wrapped.flush === 'function') wrapped.flush();
+    } catch (e) {
+      console.warn(`[DB] 退出落盘失败 ${p}:`, e.message);
+    }
+  }
+}
+
+/**
+ * 退出 / 备份前统一落盘：项目库 + **config.db**。
+ * 旧实现只遍历项目库连接，配置库被漏掉 —— 改完设置（API key、切换档案、采样参数）
+ * 后 250ms 内停止服务，这些改动就随进程一起消失；seed.js 写入的 recent_projects
+ * 以及「新建项目」登记的记录同理。凡是调用方想「把内存里的东西全部写盘」，都该用这个。
+ */
+function flushAllDbs() {
+  flushAllProjectDbs();
+  try {
+    if (configDb && typeof configDb.flush === 'function') configDb.flush();
+  } catch (e) {
+    console.warn('[DB] 配置库落盘失败:', e.message);
   }
 }
 
@@ -429,6 +633,34 @@ function getProjectDb(name) {
 // ═══════════════════════════════════════════════════════════════
 // Project DB migrations
 // ═══════════════════════════════════════════════════════════════
+
+function tableHasColumn(db, table, column) {
+  try {
+    return db.prepare(`PRAGMA table_info(${table})`).all().some((r) => r.name === column);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 幂等地保证某个列存在，失败即抛错。
+ *
+ * 旧写法是把 ALTER 丢进 try/catch 里「失败就算了」，而 runMigrations 随后会无条件推进
+ * 版本号 —— 「列缺失 + 版本号已升」意味着该步骤永远不会重试，之后每次查询都报
+ * "no such column"，且没有任何日志线索。现在改为：先查列 → 缺了才 ALTER → 事后复查确认，
+ * 任何环节不成立都抛出（宁可中止启动，也不带未知状态继续跑）。
+ */
+function ensureColumn(db, table, column, columnDef, tag) {
+  if (tableHasColumn(db, table, column)) return;
+  try {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${columnDef}`);
+  } catch (e) {
+    throw new Error(`[DB] ${tag} 迁移失败：${table}.${column} —— ${e.message}`);
+  }
+  if (!tableHasColumn(db, table, column)) {
+    throw new Error(`[DB] ${tag} 迁移失败：${table}.${column} 未创建成功`);
+  }
+}
 
 const projectMigrations = [
   // v0 → v1: initial schema
@@ -475,6 +707,7 @@ const projectMigrations = [
         motivation  TEXT DEFAULT '',
         arc         TEXT DEFAULT '',
         ext_markers TEXT DEFAULT '',
+        status      TEXT DEFAULT '',
         avatar      TEXT DEFAULT '',
         notes       TEXT DEFAULT '',
         created_at  TEXT NOT NULL DEFAULT (datetime('now')),
@@ -612,26 +845,17 @@ const projectMigrations = [
       CREATE INDEX IF NOT EXISTS idx_memories_category ON memories(category);
     `);
   },
-  // v1 → v2: add session_id column to chat_messages (legacy DBs) + index
+  // v1 → v2: chat_messages.session_id（老库补列）+ 索引
   (db) => {
-    try {
-      db.exec("ALTER TABLE chat_messages ADD COLUMN session_id TEXT NOT NULL DEFAULT '' REFERENCES chat_sessions(id) ON DELETE CASCADE");
-    } catch (e) {
-      // column already exists — ignore
-    }
-    try {
-      db.exec("CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id)");
-    } catch (e) {
-      console.warn("[DB] Migration v1→v2 (index) skipped:", e.message)
-    }
+    // 原语句带 REFERENCES + NOT NULL DEFAULT ''，SQLite 会拒绝（"Cannot add a REFERENCES
+    // column with non-NULL default value"），于是老库上这一步一直静默失败、列始终缺失。
+    // 这里用普通列保证一定加上；该外键对 sql.js 无实际约束力，不值得为它牺牲可用性。
+    ensureColumn(db, 'chat_messages', 'session_id', "TEXT NOT NULL DEFAULT ''", 'v1→v2');
+    db.exec("CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id)");
   },
   // v2 → v3: 章节定稿自动总结的支撑结构
   (db) => {
-    try {
-      db.exec("ALTER TABLE chapters ADD COLUMN summary_pending INTEGER DEFAULT 0");
-    } catch (e) {
-      // column already exists — ignore
-    }
+    ensureColumn(db, 'chapters', 'summary_pending', 'INTEGER DEFAULT 0', 'v2→v3');
     db.exec(`
       CREATE TABLE IF NOT EXISTS relation_snapshots (
         id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -654,6 +878,10 @@ const projectMigrations = [
         created_at      TEXT NOT NULL DEFAULT (datetime('now'))
       );
     `);
+  },
+  // v3 → v4: 角色状态（死亡/隐退/暂离…简短文字），供关系图与 AI 协作判断角色是否仍在叙事中
+  (db) => {
+    ensureColumn(db, 'characters', 'status', "TEXT DEFAULT ''", 'v3→v4');
   },
 ];
 
@@ -724,11 +952,12 @@ function recalculateWordCount(projectName) {
 }
 
 function getCoverDir(projectName) {
-  return path.join(PROJECTS_DIR, projectName);
+  // 封面同样按项目名建子目录 → 与项目库同一条路径安全约束
+  return path.join(PROJECTS_DIR, assertValidProjectName(projectName));
 }
 
 function getExportsDir(projectName) {
-  return projectName ? path.join(EXPORTS_DIR, projectName) : EXPORTS_DIR;
+  return projectName ? path.join(EXPORTS_DIR, assertValidProjectName(projectName)) : EXPORTS_DIR;
 }
 
 function findCoverPath(projectName) {
@@ -753,7 +982,7 @@ function getStorageInfo() {
 }
 
 /**
- * Copy config.db + projects/ + exports/ from the current storage dir to a new
+ * Copy config.db + projects/ + exports/ + snapshots/ from the current storage dir to a new
  * directory, then update the bootstrap file to point there. Old files are left
  * in place (not deleted) so the user can verify before removing them manually.
  * Caller is responsible for restarting the server afterwards — this function
@@ -789,6 +1018,10 @@ function migrateStorageLocation(newDir) {
   if (fs.existsSync(EXPORTS_DIR)) {
     fs.cpSync(EXPORTS_DIR, path.join(resolved, 'exports'), { recursive: true });
   }
+  // Copy snapshots/ — 里程碑快照是用户数据，漏掉它会让"迁移目录"变成静默丢快照
+  if (fs.existsSync(SNAPSHOTS_DIR)) {
+    fs.cpSync(SNAPSHOTS_DIR, path.join(resolved, 'snapshots'), { recursive: true });
+  }
 
   // Update bootstrap file (always in the fixed default location)
   if (!fs.existsSync(DEFAULT_DB_DIR)) fs.mkdirSync(DEFAULT_DB_DIR, { recursive: true });
@@ -802,8 +1035,14 @@ module.exports = {
   getConfigDb,
   getProjectDb,
   getProjectDbPath,
+  getProjectsDir,
+  validateProjectName,
+  assertValidProjectName,
   openProjectDb,
   closeProjectDb,
+  discardProjectDb,
+  getSnapshotsDir,
+  isValidSqliteFile,
   dbQuery,
   dbGet,
   dbExecute,
@@ -819,4 +1058,6 @@ module.exports = {
   EXT_TO_MIME,
   getStorageInfo,
   migrateStorageLocation,
+  flushAllProjectDbs,
+  flushAllDbs,
 };

@@ -1,5 +1,7 @@
-import { Brain, Loader, Search, Sparkles, X } from 'lucide-react'
+import { Brain, Loader, Pencil, Plus, Search, Sparkles, Trash2, X } from 'lucide-react'
 import { useState } from 'react'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
+import { SimpleCreateDialog } from '@/components/SimpleCreateDialog'
 import { useDataRefresh } from '@/hooks/useDataRefresh'
 import { useT } from '@/hooks/useT'
 import { aiApi, extractAIJsonArray, getAIResponseText, memoriesApi } from '@/lib/api'
@@ -31,6 +33,9 @@ export function Memory() {
   const [searchResults, setSearchResults] = useState<any[] | null>(null)
   const [searching, setSearching] = useState(false)
   const [extracting, setExtracting] = useState(false)
+  const [showCreate, setShowCreate] = useState(false)
+  const [editing, setEditing] = useState<any | null>(null)
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
 
   const handleSearch = async () => {
     if (!project || !searchQuery.trim()) return
@@ -48,6 +53,42 @@ export function Memory() {
     setSearchMode(false)
     setSearchQuery('')
     setSearchResults(null)
+  }
+
+  // 增删改后：主列表必刷；若处于搜索态，同时重跑搜索，避免显示陈旧结果
+  const refreshAfterMutation = async () => {
+    reload()
+    if (searchResults !== null && project && searchQuery.trim()) {
+      try {
+        setSearchResults(await memoriesApi.search(project, searchQuery.trim()))
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  const handleCreate = async (vals: Record<string, string>) => {
+    if (!project) return
+    await memoriesApi.create(project, { category: vals.category, content: vals.content })
+    await refreshAfterMutation()
+  }
+
+  const handleUpdate = async (vals: Record<string, string>) => {
+    if (!project || !editing) return
+    await memoriesApi.update(project, editing.id, { category: vals.category, content: vals.content })
+    await refreshAfterMutation()
+  }
+
+  const handleDelete = async (id: string) => {
+    if (!project) return
+    try {
+      await memoriesApi.delete(project, id)
+      setConfirmDeleteId(null)
+      await refreshAfterMutation()
+    } catch (e: any) {
+      setConfirmDeleteId(null)
+      alert(e.message || t('memory.deleteFailed'))
+    }
   }
 
   const handleExtract = async () => {
@@ -85,6 +126,24 @@ export function Memory() {
 
   const displayList = searchResults !== null ? searchResults : memories || []
 
+  const categoryOptions = Object.entries(CAT_LABELS).map(([value, key]) => ({ value, label: t(key) }))
+  const memoryFields = [
+    {
+      key: 'category',
+      label: t('memory.categoryLabel'),
+      type: 'select' as const,
+      options: categoryOptions,
+      required: true,
+    },
+    {
+      key: 'content',
+      label: t('memory.contentLabel'),
+      type: 'textarea' as const,
+      required: true,
+      placeholder: t('memory.contentPlaceholder'),
+    },
+  ]
+
   if (loading)
     return <div className="flex-1 flex items-center justify-center text-[var(--ink-mute)]">{t('common.loading')}</div>
 
@@ -103,7 +162,7 @@ export function Memory() {
             <Search className="w-3.5 h-3.5" /> {t('pages.semanticSearch')}
           </button>
           <button
-            className="btn-primary flex items-center gap-1.5"
+            className="btn-secondary flex items-center gap-1.5"
             style={{ height: 30, padding: '0 14px' }}
             onClick={handleExtract}
             disabled={extracting}
@@ -111,8 +170,46 @@ export function Memory() {
             {extracting ? <Loader className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
             {extracting ? t('common.extracting') : t('pages.aiExtract')}
           </button>
+          <button
+            className="btn-primary flex items-center gap-1"
+            style={{ height: 30, padding: '0 14px' }}
+            onClick={() => setShowCreate(true)}
+          >
+            <Plus className="w-3.5 h-3.5" /> {t('pages.newMemory')}
+          </button>
         </div>
       </div>
+
+      {showCreate && (
+        <SimpleCreateDialog
+          title={`+ ${t('pages.newMemory')}`}
+          fields={memoryFields}
+          initialValues={{ category: 'other' }}
+          onSubmit={handleCreate}
+          onClose={() => setShowCreate(false)}
+        />
+      )}
+
+      {editing && (
+        <SimpleCreateDialog
+          title={t('memory.editMemory')}
+          fields={memoryFields}
+          initialValues={{ category: editing.category || 'other', content: editing.content || '' }}
+          submitLabel={t('common.save')}
+          submittingLabel={t('common.saving')}
+          onSubmit={handleUpdate}
+          onClose={() => setEditing(null)}
+        />
+      )}
+
+      {confirmDeleteId && (
+        <ConfirmDialog
+          title={t('memory.deleteConfirmTitle')}
+          message={t('memory.deleteConfirmMsg')}
+          onConfirm={() => handleDelete(confirmDeleteId)}
+          onCancel={() => setConfirmDeleteId(null)}
+        />
+      )}
 
       {/* Search bar */}
       {searchMode && (
@@ -169,12 +266,31 @@ export function Memory() {
                 key={m.id}
                 className="bg-[var(--canvas-card)] border border-[var(--hairline)] rounded-lg p-3.5 transition-colors hover:border-[var(--hairline-light)] hover:bg-[var(--canvas-elevated)]"
               >
-                <span
-                  className="text-[10px] px-[7px] py-[1px] rounded-full inline-block mb-2"
-                  style={{ background: color.bg, color: color.text }}
-                >
-                  {t(CAT_LABELS[m.category] || m.category)}
-                </span>
+                <div className="flex items-start justify-between gap-2 mb-2">
+                  <span
+                    className="text-[10px] px-[7px] py-[1px] rounded-full inline-block"
+                    style={{ background: color.bg, color: color.text }}
+                  >
+                    {t(CAT_LABELS[m.category] || m.category)}
+                  </span>
+                  {/* 操作按钮常显半透明（不做悬停才显示，见协作约定） */}
+                  <div className="flex gap-0.5 shrink-0 opacity-60 hover:opacity-100 transition-opacity">
+                    <button
+                      className="w-6 h-6 flex items-center justify-center rounded text-[var(--ink-mute)] hover:text-[var(--accent-gold)] hover:bg-[var(--canvas-mid)] cursor-pointer border-none bg-transparent"
+                      onClick={() => setEditing(m)}
+                      title={t('memory.editMemory')}
+                    >
+                      <Pencil className="w-3 h-3" />
+                    </button>
+                    <button
+                      className="w-6 h-6 flex items-center justify-center rounded text-[var(--ink-mute)] hover:text-[var(--error)] hover:bg-[var(--canvas-mid)] cursor-pointer border-none bg-transparent"
+                      onClick={() => setConfirmDeleteId(m.id)}
+                      title={t('memory.deleteMemory')}
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  </div>
+                </div>
                 <div className="text-[13px] text-[var(--ink-secondary)] leading-[1.6]">{m.content}</div>
                 <div className="text-[11px] text-[var(--ink-mute)] mt-2 font-mono">
                   {m.source_chapter_id ? t('memory.sourceChapter', { n: m.source_chapter_id }) : ''}

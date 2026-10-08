@@ -5,6 +5,7 @@ import { SimpleCreateDialog } from '@/components/SimpleCreateDialog'
 import { useDataRefresh } from '@/hooks/useDataRefresh'
 import { useT } from '@/hooks/useT'
 import { charactersApi } from '@/lib/api'
+import { notifyDataChanged } from '@/lib/dataEvents'
 import { useCharacters, useProjectName } from '@/lib/useProjectData'
 import type { Character } from '@/types'
 
@@ -45,6 +46,7 @@ export function Characters() {
       background: selected.background || '',
       motivation: selected.motivation || '',
       arc: selected.arc || '',
+      status: selected.status || '',
     })
     setSaveError('')
     setEditing(true)
@@ -67,6 +69,8 @@ export function Characters() {
       await charactersApi.update(project, selected.id, draft)
       setEditing(false)
       reload()
+      // 角色名/状态变化会影响关系图的节点显示
+      notifyDataChanged('character')
     } catch (e: any) {
       setSaveError(e.message || t('characters.saveFailed'))
     } finally {
@@ -80,6 +84,8 @@ export function Characters() {
       await charactersApi.delete(project, id)
       setConfirmDeleteId(null)
       reload()
+      // 关系表在 DB 层 CASCADE 删除；广播让关系图同步移除该节点与其连线
+      notifyDataChanged('character')
     } catch (e: any) {
       setConfirmDeleteId(null)
       alert(e.message || t('characters.deleteFailed'))
@@ -137,10 +143,16 @@ export function Characters() {
               placeholder: t('characters.motivationPlaceholder'),
             },
             { key: 'arc', label: t('pages.arc'), type: 'textarea', placeholder: t('characters.arcPlaceholder') },
+            {
+              key: 'status',
+              label: t('characters.statusLabel'),
+              placeholder: t('characters.statusPlaceholder'),
+            },
           ]}
           onSubmit={async (vals) => {
             await charactersApi.create(project, vals)
             reload()
+            notifyDataChanged('character')
           }}
           onClose={() => setShowCreate(false)}
         />
@@ -177,7 +189,7 @@ export function Characters() {
                       c.firstVolumeOrder != null
                         ? t('characters.firstAppearsVolumeChapter', {
                             volume: c.firstVolumeOrder,
-                            chapter: c.firstChapter,
+                            chapter: c.firstChapter ?? 0,
                           })
                         : `${t('characters.firstChapterLabel')} ${c.firstChapter ?? '?'}`
                     } · ${t('characters.chapterAppearancesTotal', { n: c.chapterCount ?? 0 })}`}
@@ -287,6 +299,16 @@ export function Characters() {
                     className="form-input"
                     readOnly={!editing}
                     onChange={(e) => setDraft((d) => ({ ...d, gender: e.target.value }))}
+                  />
+                </FormField>
+                <FormField label={t('characters.statusLabel')} full>
+                  <input
+                    type="text"
+                    value={editing ? (draft.status ?? '') : selected.status || ''}
+                    className="form-input"
+                    readOnly={!editing}
+                    placeholder={t('characters.statusPlaceholder')}
+                    onChange={(e) => setDraft((d) => ({ ...d, status: e.target.value }))}
                   />
                 </FormField>
               </div>

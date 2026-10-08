@@ -57,7 +57,10 @@ export function BottomStatusbar() {
       .get(currentProject)
       .then((meta: any) => {
         if (mountedRef.current) {
-          setWritingLang(meta.language === 'en' ? 'English' : '中文')
+          // 写作语言由模型自动识别，不再由用户指定
+          setWritingLang(
+            meta.language === 'en' ? 'English' : meta.language === 'zh' ? '中文' : t('bottomBar.autoDetect'),
+          )
         }
       })
       .catch(() => {})

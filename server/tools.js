@@ -50,11 +50,13 @@ const TOOLS = [
     type: 'function',
     function: {
       name: 'update_chapter',
-      description: '更新章节内容。可以只更新部分字段，传入哪些就更新哪些。支持更新的字段：title、content、outline、status、summary、cognitive_frame、emotional_anchor、world_texture、concrete_mystery、interpersonal_tension。status 可选值：pending（待写）、writing（写作中）、review（审核中）、accepted（已定稿）。',
+      description: '更新章节内容。可以只更新部分字段，传入哪些就更新哪些。支持更新的字段：title、content、outline、status、summary、cognitive_frame、emotional_anchor、world_texture、concrete_mystery、interpersonal_tension。status 可选值：pending（待写）、writing（写作中）、review（审核中）、accepted（已定稿）。正文较长时请分 2-3 次写入：第一段用 content_mode="replace"，后续段落用 content_mode="append"，最后一段再设 status。',
       parameters: {
         type: 'object',
         properties: {
           chapter_num: { type: 'number', description: '章节编号' },
+          volume_id: { type: 'number', description: '所在卷 ID（可选）。章节号在多卷中重复时必须指定，否则调用会被拒绝' },
+          content_mode: { type: 'string', enum: ['replace', 'append'], description: '正文写入方式（可选，默认 replace）。replace 覆盖整章正文；append 在已有正文之后追加，用于分段写长章节' },
           title: { type: 'string', description: '标题（可选）' },
           content: { type: 'string', description: '正文内容（可选）' },
           outline: { type: 'string', description: '大纲（可选）' },
@@ -120,6 +122,7 @@ const TOOLS = [
           background: { type: 'string', description: '背景故事（可选）' },
           motivation: { type: 'string', description: '动机（可选）' },
           arc: { type: 'string', description: '角色弧线（可选）' },
+          status: { type: 'string', description: '当前状态（可选）：如"在世"、"死亡"、"隐退"、"暂时离开"等简短文字，用于标记角色当前是否仍在叙事中' },
           notes: { type: 'string', description: '备注（可选）' },
         },
         required: ['name'],
@@ -142,6 +145,7 @@ const TOOLS = [
           background: { type: 'string', description: '背景' },
           motivation: { type: 'string', description: '动机' },
           arc: { type: 'string', description: '角色弧线' },
+          status: { type: 'string', description: '当前状态：如"在世"、"死亡"、"隐退"、"暂时离开"等简短文字。角色退场时更新此字段，而不是删除角色' },
           notes: { type: 'string', description: '备注' },
         },
         required: ['name'],
@@ -428,6 +432,7 @@ const TOOLS = [
           relation_type: { type: 'string', description: '关系类型，如：朋友、敌人、恋人等（可选）' },
           description: { type: 'string', description: '关系描述（可选）' },
           intensity: { type: 'number', description: '关系强度 1-5（可选）' },
+          ended_at: { type: 'string', description: '关系结束时间/章节，如"第12章"、"2035年"。关系终止（角色死亡、决裂、离散）时填写，留空表示仍在持续；关系图会以虚线区分（可选）' },
         },
         required: ['id'],
       },
@@ -709,6 +714,27 @@ function executeTool(projectName, toolName, args) {
     return { deleted: true, [idField]: id };
   }
 
+  // 章节定位。chapters 表是 UNIQUE(volume_id, num)，num 只在卷内唯一，
+  // 单用 num 会同时命中所有卷里的同号章节——实测 update_chapter 会把
+  // 第一卷与第二卷的「第 1 章」一起改写。这里统一按 volume_id 收窄，
+  // 定位不唯一时报错要求指定，不猜。
+  function locateChapter(chapterNum, volumeId) {
+    const num = Number(chapterNum);
+    if (!Number.isFinite(num)) {
+      return { error: `chapter_num 必须是数字，收到 ${JSON.stringify(chapterNum)}；先用 list_chapters 确认章节号` };
+    }
+    const rows = pdb.prepare('SELECT id, volume_id, num, title, content, status FROM chapters WHERE num = ?').all(num);
+    if (rows.length === 0) return { error: `章节 ${num} 不存在；先用 list_chapters 确认章节号` };
+    if (volumeId !== undefined && volumeId !== null && volumeId !== '') {
+      const hit = rows.find((r) => String(r.volume_id) === String(volumeId));
+      if (!hit) return { error: `第 ${num} 章不在卷 ${volumeId} 中；先用 list_chapters 确认` };
+      return { row: hit };
+    }
+    if (rows.length === 1) return { row: rows[0] };
+    const vols = rows.map((r) => `${r.volume_id}「${r.title || ''}」`).join('、');
+    return { error: `第 ${num} 章在多卷中重复出现（卷 ${vols}），调用时必须传 volume_id 指定目标` };
+  }
+
   switch (toolName) {
     // ── Chapters ──
     case 'list_chapters': {
@@ -738,8 +764,19 @@ function executeTool(projectName, toolName, args) {
       return { created: true, chapter_num: num, title: args.title };
     }
     case 'update_chapter': {
-      const { chapter_num, ...fields } = args;
+      const { chapter_num, volume_id, content_mode = 'replace', ...fields } = args;
       const allowed = ['title', 'content', 'outline', 'status', 'summary', 'cognitive_frame', 'emotional_anchor', 'world_texture', 'concrete_mystery', 'interpersonal_tension'];
+      const located = locateChapter(chapter_num, volume_id);
+      if (located.error) return { error: located.error };
+      const chapter = located.row;
+      if (content_mode !== 'replace' && content_mode !== 'append') {
+        return { error: `content_mode 只能是 replace 或 append，收到 ${JSON.stringify(content_mode)}` };
+      }
+      // 分段写入长正文：append 在已有正文之后拼接，供模型分 2-3 次把一章写完。
+      // 上游输出被截断时，这是唯一能把整章写全的路径。
+      if (fields.content !== undefined && content_mode === 'append') {
+        fields.content = `${chapter.content || ''}${fields.content}`;
+      }
       const updates = [];
       const params = [];
       for (const key of allowed) {
@@ -748,21 +785,42 @@ function executeTool(projectName, toolName, args) {
           params.push(fields[key]);
         }
       }
-      if (updates.length === 0) return { error: '没有要更新的字段' };
+      if (updates.length === 0) {
+        // 这条错误会原样回给模型：必须让它看清该传什么、怎么分段，
+        // 否则它只能盲试 2-3 轮（实测 update_chapter 原先 71% 的调用参数为空）。
+        return {
+          error: '没有要更新的字段。update_chapter 除 chapter_num 外至少要传一个：'
+            + `${allowed.join('、')}。写正文用 content，改状态用 status。`
+            + '本次调用未修改任何数据，请重新调用并把参数写完整；正文较长时分段写入（首段 content_mode="replace"，后续段落 content_mode="append"）。',
+        };
+      }
       if (fields.content !== undefined) {
         const wc = String(fields.content).replace(/\s/g, '').length;
         updates.push('word_count = ?');
         params.push(wc);
       }
       updates.push("updated_at = datetime('now')");
-      params.push(chapter_num);
-      pdb.prepare(`UPDATE chapters SET ${updates.join(', ')} WHERE num = ?`).run(...params);
+      params.push(chapter.id);
+      pdb.prepare(`UPDATE chapters SET ${updates.join(', ')} WHERE id = ?`).run(...params);
       db.recalculateWordCount(projectName);
       // 定稿触发自动总结（fire-and-forget）
       if (fields.status === 'accepted') {
         markAndEnqueue(projectName, chapter_num);
       }
-      return { updated: true, chapter_num, changed_fields: Object.keys(fields).filter(k => allowed.includes(k)) };
+      const out = {
+        updated: true,
+        chapter_num: chapter.num,
+        volume_id: chapter.volume_id,
+        changed_fields: Object.keys(fields).filter(k => allowed.includes(k)),
+      };
+      // 回传写入后正文的总长度：模型据此自检分段是否真的追加成功
+      // （本想 append 却用了 replace 时，长度会明显变小）
+      if (fields.content !== undefined) {
+        out.content_mode = content_mode;
+        out.content_length = String(fields.content).length;
+        out.word_count = String(fields.content).replace(/\s/g, '').length;
+      }
+      return out;
     }
     case 'delete_chapter': {
       const row = pdb.prepare('SELECT id FROM chapters WHERE num = ?').get(args.chapter_num);
@@ -774,7 +832,7 @@ function executeTool(projectName, toolName, args) {
 
     // ── Characters ──
     case 'list_characters': {
-      return pdb.prepare('SELECT id, name, age, gender, personality, background, motivation, arc, notes FROM characters ORDER BY name').all();
+      return pdb.prepare('SELECT id, name, age, gender, personality, background, motivation, arc, notes, status FROM characters ORDER BY name').all();
     }
     case 'get_character': {
       const row = pdb.prepare('SELECT * FROM characters WHERE name = ?').get(args.name);
@@ -790,17 +848,17 @@ function executeTool(projectName, toolName, args) {
     }
     case 'create_character': {
       const id = randomUUID();
-      pdb.prepare(`INSERT INTO characters (id, name, age, gender, appearance, personality, background, motivation, arc, notes)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      pdb.prepare(`INSERT INTO characters (id, name, age, gender, appearance, personality, background, motivation, arc, notes, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(id, args.name, args.age || '', args.gender || '', args.appearance || '', args.personality || '',
-          args.background || '', args.motivation || '', args.arc || '', args.notes || '');
+          args.background || '', args.motivation || '', args.arc || '', args.notes || '', args.status || '');
       return { created: true, id, name: args.name };
     }
     case 'update_character': {
       const { name, ...fields } = args;
       const existing = pdb.prepare('SELECT id FROM characters WHERE name = ?').get(name);
       if (!existing) return { error: `角色 "${name}" 不存在` };
-      const allowed = ['age', 'gender', 'appearance', 'personality', 'background', 'motivation', 'arc', 'notes'];
+      const allowed = ['age', 'gender', 'appearance', 'personality', 'background', 'motivation', 'arc', 'notes', 'status'];
       const updates = [];
       const params = [];
       for (const key of allowed) {
@@ -964,7 +1022,7 @@ function executeTool(projectName, toolName, args) {
 
     // ── Relations update/delete ──
     case 'update_relation': {
-      return updateById(args.id, 'character_relations', args, ['relation_type', 'description', 'intensity'], false);
+      return updateById(args.id, 'character_relations', args, ['relation_type', 'description', 'intensity', 'ended_at'], false);
     }
     case 'delete_relation': {
       return deleteById(args.id, 'character_relations', 'id', '关系');
@@ -1100,7 +1158,7 @@ function executeTool(projectName, toolName, args) {
         genres: genres,
         genreLabels: genres.map(g => genreLabels[g] || g),
         mode: meta.mode || 'medium-novel',
-        language: meta.language || 'zh',
+        language: meta.language || 'auto',
         phase: meta.workflow_phase || 'idea',
         phaseLabel: ({idea:'选题',setting:'设定',outline:'大纲',writing:'写作',review:'审阅',consistency:'一致性',export:'导出'})[meta.workflow_phase] || '选题',
         wordCount: meta.word_count || 0,

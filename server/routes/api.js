@@ -4,6 +4,7 @@ const { randomUUID } = require('crypto');
 const path = require('path');
 const fs = require('fs');
 const db = require('../db');
+const snapshots = require('../snapshots');
 const { markAndEnqueue } = require('../summarizer');
 
 function project(name) {
@@ -24,6 +25,74 @@ function updateRecord(projectName, table, id, body, allowedFields, addUpdatedAt)
   params.push(id);
   const changes = db.projectExecute(projectName, `UPDATE ${table} SET ${fields.join(', ')} WHERE id = ?`, params);
   return changes;
+}
+
+/** 批量校验角色 id 是否仍然存在，返回不存在的 id 列表（用于给出可读的 400 而不是 FK 报错）。 */
+function missingCharacters(projectName, ids) {
+  const missing = [];
+  for (const id of ids) {
+    if (!id) continue;
+    if (!db.projectGet(projectName, 'SELECT id FROM characters WHERE id = ?', [id])) missing.push(id);
+  }
+  return missing;
+}
+
+// ─── 项目名校验（统一入口）───
+// 项目名会直接拼进文件路径（<PROJECTS_DIR>/<name>.mythpen.db）。含 `/` 的名称把落盘
+// 路径拆进不存在的子目录 → 防抖落盘 ENOENT 击穿进程，且该项目数据只在内存里、重启即丢
+// （2026-09-25 实际发生：项目名 "Common Sense, Luv/Hate"）。
+// 挂在 param 钩子上，一次覆盖全部 /:project/... 与 /projects/:name 路由。
+function rejectInvalidProjectName(res, name) {
+  const v = db.validateProjectName(name);
+  if (v.ok) return false;
+  res.status(400).json({ error: { code: 'INVALID_PROJECT_NAME', message: v.message, recoverable: true } });
+  return true;
+}
+
+for (const paramName of ['project', 'name']) {
+  router.param(paramName, (req, res, next, value) => {
+    if (rejectInvalidProjectName(res, value)) return;
+    next();
+  });
+}
+
+/**
+ * 让 recent_projects 与磁盘上的项目库文件对齐（单向补齐）。
+ *
+ * 实际场景（2026-09-25 亲见）：projects/ 里躺着 我的科幻小说.mythpen.db，但 config.db
+ * 是后来重建的 → recent_projects 里没有这条记录 → 项目列表空空如也，用户以为数据没了。
+ * 这里只做「磁盘上有、登记里没有 → 补登记」，不做反向删除：登记了却找不到文件时
+ * 保留记录不动，交给「删除项目」的正常流程处理，避免误清用户的项目清单。
+ */
+function syncRecentProjects() {
+  const dir = db.getProjectsDir();
+  let files;
+  try {
+    files = fs.readdirSync(dir);
+  } catch {
+    return;
+  }
+  const known = new Set(db.dbQuery('SELECT file_path FROM recent_projects').map((r) => r.file_path));
+  const SUFFIX = '.mythpen.db';
+  for (const file of files) {
+    if (!file.endsWith(SUFFIX) || known.has(path.join(dir, file))) continue;
+    const filePath = path.join(dir, file);
+    try {
+      if (!fs.statSync(filePath).isFile()) continue;
+    } catch {
+      continue;
+    }
+    const checked = db.validateProjectName(file.slice(0, -SUFFIX.length));
+    if (!checked.ok) {
+      console.warn(`[Projects] 跳过名称非法的项目库文件: ${file}`);
+      continue;
+    }
+    console.warn(`[Projects] 发现未登记的项目库，已补进项目列表: ${checked.name}`);
+    db.dbExecute(
+      'INSERT OR REPLACE INTO recent_projects (id, name, file_path, last_opened, word_count) VALUES (?, ?, ?, ?, ?)',
+      [checked.name, checked.name, filePath, new Date().toISOString(), 0],
+    );
+  }
 }
 
 // ═══════════════════════════════════════════
@@ -57,10 +126,17 @@ router.post('/storage-location', (req, res) => {
 // ═══════════════════════════════════════════
 
 router.get('/projects', (req, res) => {
+  // 先跟磁盘对齐：补登记「有库文件但没登记」的项目，避免项目列表空着、用户以为数据丢了
+  try { syncRecentProjects(); } catch (e) { console.warn('[Projects] 项目列表对齐失败:', e.message); }
   const rows = db.dbQuery('SELECT * FROM recent_projects ORDER BY last_opened DESC');
   const projects = rows.map(r => {
     let status = '刚起步';
     try {
+      // 文件不存在时绝不能走 openProjectDb：它把「不存在的项目」当新项目，
+      // 在内存里建一个空库、250ms 后落盘 —— 已删除的项目会凭空复活。
+      // getProjectDb 早已有这道防线，这里是漏掉的一处。复活出来的空壳库还会被
+      // 下一次列表请求当成正常项目统计，用户看到的就是一个 0 章 0 字的项目。
+      if (!fs.existsSync(r.file_path)) throw new Error('PROJECT_FILE_MISSING');
       const db2 = db.openProjectDb(r.file_path);
       const meta = {};
       db2.prepare('SELECT key, value FROM project_meta').all().forEach(m => meta[m.key] = m.value);
@@ -85,18 +161,24 @@ router.get('/projects', (req, res) => {
 });
 
 router.post('/projects', (req, res) => {
-  const { name, mode = 'medium-novel', language = 'zh', genres = ['other'] } = req.body || {};
-  if (!name) return res.status(400).json({ error: { code: 'INVALID_PARAMS', message: '项目名称不能为空', recoverable: true } });
+  // language 默认 'auto'：写作语言由模型从用户输入自动识别，无需显式指定
+  const { name, mode = 'medium-novel', language = 'auto', genres = ['other'] } = req.body || {};
+  // 名称是文件路径的一部分，非法字符必须在写盘之前拦掉（校验顺带完成 trim 归一化）
+  const checked = db.validateProjectName(name);
+  if (!checked.ok) {
+    return res.status(400).json({ error: { code: 'INVALID_PROJECT_NAME', message: checked.message, recoverable: true } });
+  }
+  const projectName = checked.name;
 
-  const filePath = db.getProjectDbPath(name);
+  const filePath = db.getProjectDbPath(projectName);
   if (require('fs').existsSync(filePath)) {
-    return res.status(409).json({ error: { code: 'PROJECT_ALREADY_EXISTS', message: `项目"${name}"已存在`, recoverable: true } });
+    return res.status(409).json({ error: { code: 'PROJECT_ALREADY_EXISTS', message: `项目"${projectName}"已存在`, recoverable: true } });
   }
 
   // Create new project DB
   const pdb = db.openProjectDb(filePath);
   const metaInsert = pdb.prepare('INSERT OR REPLACE INTO project_meta (key, value) VALUES (?, ?)');
-  const meta = { name, description: '', mode, language, version: '1', created_at: new Date().toISOString(), updated_at: new Date().toISOString(), word_count: '0', author_name: '佚名', workflow_phase: 'idea' };
+  const meta = { name: projectName, description: '', mode, language, version: '1', created_at: new Date().toISOString(), updated_at: new Date().toISOString(), word_count: '0', author_name: '佚名', workflow_phase: 'idea' };
   for (const [k, v] of Object.entries(meta)) metaInsert.run(k, v);
 
   // Default volume
@@ -109,9 +191,23 @@ router.post('/projects', (req, res) => {
 
   // Config
   const config = db.getConfigDb();
-  config.prepare('INSERT OR REPLACE INTO recent_projects (id, name, file_path, last_opened, word_count) VALUES (?, ?, ?, ?, ?)').run(name, name, filePath, new Date().toISOString(), 0);
+  config.prepare('INSERT OR REPLACE INTO recent_projects (id, name, file_path, last_opened, word_count) VALUES (?, ?, ?, ?, ?)').run(projectName, projectName, filePath, new Date().toISOString(), 0);
 
-  res.json({ name, filePath, mode, language, genres });
+  // 立刻留一份「初始状态」：此刻库里只有项目名、风格与一个空卷，没有任何会话和叙事元素。
+  // 共创会把讨论出的设定直接写进这个库，而库里的元素又进入之后每一轮提示词，所以开局
+  // 不合意时光在会话里重试只会得到大差不差的结果 —— 必须能退回这一刻。
+  // 失败只告警不阻断建项目：快照是附加能力，不能因为磁盘问题让建项目整个失败。
+  try {
+    snapshots.createSnapshot(projectName, {
+      kind: snapshots.KIND_INITIAL,
+      label: snapshots.INITIAL_LABEL,
+      unique: true,
+    });
+  } catch (e) {
+    console.warn(`[Projects] 建项目时留初始快照失败 ${projectName}:`, e.message);
+  }
+
+  res.json({ name: projectName, filePath, mode, language, genres });
 });
 
 router.get('/projects/:name', (req, res) => {
@@ -132,6 +228,9 @@ router.delete('/projects/:name', (req, res) => {
   const filePath = db.getProjectDbPath(name);
   db.closeProjectDb(filePath);
   try { require('fs').unlinkSync(filePath); } catch(e) { console.warn(`[Projects] 删除文件失败 ${filePath}:`, e.message); }
+  // 快照跟着项目一起删：项目没了之后这些文件再也无法从界面上访问到，
+  // 留着只是占磁盘的孤儿数据。
+  try { snapshots.deleteAllSnapshots(name); } catch(e) { console.warn(`[Projects] 清理快照失败 ${name}:`, e.message); }
   db.dbExecute('DELETE FROM recent_projects WHERE name = ?', [name]);
   res.json({ success: true });
 });
@@ -316,12 +415,12 @@ router.get('/:project/characters/:id', (req, res) => {
 });
 
 router.post('/:project/characters', (req, res) => {
-  const { name, age = '', gender = '', appearance = '', personality = '', background = '', motivation = '', arc = '', ext_markers = '' } = req.body || {};
+  const { name, age = '', gender = '', appearance = '', personality = '', background = '', motivation = '', arc = '', ext_markers = '', status = '' } = req.body || {};
   if (!name) return res.status(400).json({ error: { code: 'INVALID_PARAMS', message: '角色名不能为空', recoverable: true } });
   const id = randomUUID();
   db.projectExecute(project(req.params.project),
-    'INSERT INTO characters (id, name, age, gender, appearance, personality, background, motivation, arc, ext_markers) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    [id, name, age, gender, appearance, personality, background, motivation, arc, ext_markers]
+    'INSERT INTO characters (id, name, age, gender, appearance, personality, background, motivation, arc, ext_markers, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    [id, name, age, gender, appearance, personality, background, motivation, arc, ext_markers, status]
   );
   res.status(201).json({ id, name });
 });
@@ -329,7 +428,7 @@ router.post('/:project/characters', (req, res) => {
 router.put('/:project/characters/:id', (req, res) => {
   const { id } = req.params;
   const fields = []; const params = [];
-  for (const key of ['name', 'age', 'gender', 'appearance', 'personality', 'background', 'motivation', 'arc', 'ext_markers', 'notes']) {
+  for (const key of ['name', 'age', 'gender', 'appearance', 'personality', 'background', 'motivation', 'arc', 'ext_markers', 'notes', 'status']) {
     if (req.body[key] !== undefined) { fields.push(`${key} = ?`); params.push(req.body[key]); }
   }
   if (fields.length === 0) return res.status(400).json({ error: { code: 'INVALID_PARAMS', message: '没有要更新的字段', recoverable: true } });
@@ -449,17 +548,40 @@ router.get('/:project/relations', (req, res) => {
 });
 
 router.post('/:project/relations', (req, res) => {
-  const { character_a_id, character_b_id, relation_type, description = '', intensity = 3 } = req.body || {};
+  const { character_a_id, character_b_id, relation_type, description = '', intensity = 3, ended_at = '' } = req.body || {};
+  if (!character_a_id || !character_b_id) {
+    return res.status(400).json({ error: { message: '必须指定关系两端的角色', recoverable: true } });
+  }
+  if (character_a_id === character_b_id) {
+    return res.status(400).json({ error: { message: '关系的两端不能是同一个角色', recoverable: true } });
+  }
+  const bad = missingCharacters(project(req.params.project), [character_a_id, character_b_id]);
+  if (bad.length > 0) {
+    return res.status(400).json({ error: { message: `角色不存在：${bad.join('、')}`, recoverable: true } });
+  }
   const id = randomUUID();
   db.projectExecute(project(req.params.project),
-    'INSERT INTO character_relations (id, character_a_id, character_b_id, relation_type, description, intensity) VALUES (?, ?, ?, ?, ?, ?)',
-    [id, character_a_id, character_b_id, relation_type, description, intensity]
+    'INSERT INTO character_relations (id, character_a_id, character_b_id, relation_type, description, intensity, ended_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    [id, character_a_id, character_b_id, relation_type, description, intensity, ended_at]
   );
   res.status(201).json({ id });
 });
 
 router.put('/:project/relations/:id', (req, res) => {
-  const changes = updateRecord(project(req.params.project), 'character_relations', req.params.id, req.body, ['relation_type', 'description', 'intensity'], false);
+  const body = req.body || {};
+  // 允许改关系两端：前端编辑弹窗会一并提交角色，此前这两个字段不在 allowed 里，
+  // 于是「改了角色 → 提示保存成功 → 重新加载后角色没变」。
+  if (body.character_a_id !== undefined && body.character_b_id !== undefined
+      && body.character_a_id === body.character_b_id) {
+    return res.status(400).json({ error: { message: '关系的两端不能是同一个角色', recoverable: true } });
+  }
+  const ids = [body.character_a_id, body.character_b_id].filter(Boolean);
+  const bad = missingCharacters(project(req.params.project), ids);
+  if (bad.length > 0) {
+    return res.status(400).json({ error: { message: `角色不存在：${bad.join('、')}`, recoverable: true } });
+  }
+  const changes = updateRecord(project(req.params.project), 'character_relations', req.params.id, body,
+    ['character_a_id', 'character_b_id', 'relation_type', 'description', 'intensity', 'started_at', 'ended_at'], false);
   if (changes === null) return res.status(400).json({ error: { message: '没有要更新的字段' } });
   if (changes === 0) return res.status(404).json({ error: { message: '关系不存在' } });
   res.json({ success: true });
@@ -1054,6 +1176,79 @@ router.post('/:project/chat/messages', (req, res) => {
     "UPDATE chat_sessions SET updated_at = datetime('now') WHERE id = ?", [session_id]
   );
   res.status(201).json({ id, role, content, toolCalls: toolCalls || [], session_id, createdAt: new Date().toISOString() });
+});
+
+// ═══════════════════════════════════════════
+// SNAPSHOTS（里程碑快照）
+// ═══════════════════════════════════════════
+//
+// 用途：AI 共创会把设定直接写进项目库，开局那批元素不合意时，光在会话里重试没用
+// （模型每次都读到库里已有的元素）。留一份「初始状态」快照，不满意就整份还原。
+// 详见 server/snapshots.js 顶部说明。
+
+/** 快照模块的错误自带 code，映射成合适的状态码，别让全部情况都退化成 500。 */
+function snapshotError(res, e, fallbackMessage) {
+  const code = e && e.code;
+  if (code === 'SNAPSHOT_NOT_FOUND' || code === 'PROJECT_NOT_FOUND') {
+    return res.status(404).json({ error: { code, message: e.message, recoverable: true } });
+  }
+  if (code === 'INVALID_SNAPSHOT_ID' || code === 'INVALID_PROJECT_NAME') {
+    return res.status(400).json({ error: { code, message: e.message, recoverable: true } });
+  }
+  // 快照损坏 / 还原后自检失败：请求本身没错，是目标状态不可用，用 409
+  if (code === 'SNAPSHOT_CORRUPT' || code === 'RESTORE_VERIFY_FAILED') {
+    return res.status(409).json({ error: { code, message: e.message, recoverable: true } });
+  }
+  return res.status(500).json({ error: { message: e.message || fallbackMessage, recoverable: true } });
+}
+
+router.get('/:project/snapshots', (req, res) => {
+  try {
+    const list = snapshots.listSnapshots(req.params.project);
+    res.json({ snapshots: list, totalBytes: snapshots.snapshotsSize(req.params.project) });
+  } catch (e) {
+    snapshotError(res, e, '读取快照列表失败');
+  }
+});
+
+router.post('/:project/snapshots', (req, res) => {
+  const { label, kind } = req.body || {};
+  try {
+    // 只接受前端声明的这两种。safety 是还原流程内部产生的，
+    // 允许外部指定只会让「自动备份」被用户手动伪造成普通里程碑。
+    const wanted = kind === snapshots.KIND_INITIAL ? snapshots.KIND_INITIAL : snapshots.KIND_MANUAL;
+    const existed =
+      wanted === snapshots.KIND_INITIAL &&
+      snapshots.listSnapshots(req.params.project).some((s) => s.kind === snapshots.KIND_INITIAL);
+    const meta = snapshots.createSnapshot(req.params.project, {
+      label,
+      kind: wanted,
+      // 「初始状态」一个项目只该有一份：前端重试、或用户反复进入项目页，
+      // 都不该堆出多份同名里程碑把列表占满。
+      unique: wanted === snapshots.KIND_INITIAL,
+    });
+    res.status(existed ? 200 : 201).json(meta);
+  } catch (e) {
+    snapshotError(res, e, '创建快照失败');
+  }
+});
+
+router.post('/:project/snapshots/:id/restore', (req, res) => {
+  const { safetyLabel } = req.body || {};
+  try {
+    res.json(snapshots.restoreSnapshot(req.params.project, req.params.id, { safetyLabel }));
+  } catch (e) {
+    snapshotError(res, e, '还原快照失败');
+  }
+});
+
+router.delete('/:project/snapshots/:id', (req, res) => {
+  try {
+    snapshots.deleteSnapshot(req.params.project, req.params.id);
+    res.json({ success: true });
+  } catch (e) {
+    snapshotError(res, e, '删除快照失败');
+  }
 });
 
 module.exports = router;

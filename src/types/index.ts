@@ -68,6 +68,8 @@ export interface Character {
   extMarkers: string
   avatar: string
   notes: string
+  /** 角色当前状态（简短文字）：如"在世"、"死亡"、"隐退"、"暂时离开"；空 = 未标注 */
+  status?: string
   chapterCount?: number
   firstChapter?: number | null
   firstVolumeOrder?: number | null
@@ -98,9 +100,10 @@ export interface Foreshadow {
   title: string
   description: string
   status: 'planted' | 'progressing' | 'resolved' | 'abandoned'
-  plantedChapterId?: number
-  expectedResolveChapter: number
-  resolvedChapterId?: number
+  // 字段名与数据库列一致：API 直接返回 SELECT * 的原始行（未做 camelCase 映射）
+  planted_chapter_id?: number | null
+  expected_resolve_chapter: number
+  resolved_chapter_id?: number | null
   priority: 'low' | 'normal' | 'high'
 }
 
@@ -116,15 +119,16 @@ export interface Memory {
 // ─── Character Relation ───
 export interface CharacterRelation {
   id: string
-  characterAId: string
-  characterBId: string
-  relationType: string
+  // 字段名与数据库列一致：API 直接返回 SELECT * 的原始行（未做 camelCase 映射）
+  character_a_id: string
+  character_b_id: string
+  relation_type: string
   description: string
   intensity: number
-  startedAt: string
-  endedAt: string
-  layoutX?: number
-  layoutY?: number
+  started_at: string
+  ended_at: string
+  layout_x?: number
+  layout_y?: number
 }
 
 // ─── Graph Nodes ───
@@ -181,7 +185,7 @@ export interface ChatMessage {
 export interface AIProviderProfile {
   id: string
   name: string
-  type: 'openai' | 'openai-response' | 'claude'
+  type: 'openai' | 'openai-response' | 'claude' | 'gemini'
   baseUrl: string
   apiKey: string
   model: string
@@ -197,6 +201,10 @@ export interface AIProviderProfile {
   topP?: number
   /** 探针结果：该供应商是否接受 top_p 参数（null = 未探测） */
   toppSupported?: boolean | null
+  /** 思维链语言：'writing' = 用与正文相同的语言思考（模型自动识别）；'default'/未设置 = 不干预，跟随模型默认 */
+  reasoningLang?: 'writing' | 'default'
+  /** 思考档位：default/未设置 = 不发送（黄金规则）；off = 关闭；low/medium/high = 思考强度 */
+  thinkingLevel?: 'default' | 'off' | 'low' | 'medium' | 'high'
 }
 
 export interface AppSettings {
@@ -206,7 +214,7 @@ export interface AppSettings {
   apiKeyOpenai: string
   apiBaseUrl: string
   apiModel: string
-  apiType: 'openai' | 'openai-response' | 'claude'
+  apiType: 'openai' | 'openai-response' | 'claude' | 'gemini'
   uiLanguage: 'zh' | 'en'
   theme: 'dark' | 'light'
   editorFontSize: number
@@ -216,6 +224,8 @@ export interface AppSettings {
   accentColor: string
   maxOutputTokens: number
   httpTimeout: number
+  /** 展示侧开关：是否在 AI 面板显示模型思维链（仅影响展示，不影响请求） */
+  showThinking: boolean
 }
 
 // ─── Statistics ───
@@ -273,4 +283,38 @@ export interface SidebarItem {
   sortOrder: number
   route: string
   enabled: boolean
+}
+
+// ─── 里程碑快照 ───
+
+/** 快照时的内容量统计。让界面能直接读出「这一刻有什么」，不必点开才知道。 */
+export interface SnapshotStats {
+  volumes: number
+  chapters: number
+  characters: number
+  relations: number
+  world: number
+  science: number
+  foreshadows: number
+  memories: number
+  timeline: number
+  clues: number
+  chatSessions: number
+  chatMessages: number
+  wordCount: number
+  phase: WorkflowPhase
+}
+
+export interface SnapshotMeta {
+  id: string
+  project: string
+  /** initial = 建项目时自动留的初始状态；manual = 手动打点；safety = 还原前自动备份 */
+  kind: 'initial' | 'manual' | 'safety'
+  label: string
+  createdAt: string
+  dbBytes: number
+  hasCover: boolean
+  stats: SnapshotStats
+  /** 由列表接口计算得出：库文件缺失或损坏时为 broken，这种快照不可还原 */
+  integrity?: 'ok' | 'broken'
 }

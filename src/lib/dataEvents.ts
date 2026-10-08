@@ -20,6 +20,7 @@ export type EntityType =
   | 'stats'
   | 'project'
   | 'chat'
+  | 'snapshot'
   | 'all'
 
 export type DataChangeEvent = { entity: EntityType; ids?: (string | number)[]; source?: 'auto' | 'manual' }
@@ -124,28 +125,51 @@ export function refreshAllData(project?: string): Promise<void> {
  * Read-only tools (list_*, get_*) return null since they don't modify data.
  */
 
-const TOOL_ENTITY_MAP: Record<string, EntityType | undefined> = {
+const TOOL_ENTITY_MAP: Record<string, EntityType | EntityType[] | undefined> = {
   // Chapters
   create_chapter: 'chapter',
   update_chapter: 'chapter',
   delete_chapter: 'chapter',
+  // Volumes
+  create_volume: 'volume',
+  update_volume: 'volume',
+  delete_volume: 'volume',
   // Characters
   create_character: 'character',
   update_character: 'character',
+  delete_character: 'character',
+  // Chapter ↔ Character links affect both sides
+  set_chapter_character: ['chapter', 'character'],
+  remove_chapter_character: ['chapter', 'character'],
   // World
   create_world_entry: 'world',
   update_world_entry: 'world',
+  delete_world_entry: 'world',
+  // Science
+  create_science_entry: 'science',
+  delete_science_entry: 'science',
   // Foreshadows
   create_foreshadow: 'foreshadow',
   update_foreshadow: 'foreshadow',
+  delete_foreshadow: 'foreshadow',
   // Relations
   create_relation: 'relation',
   update_relation: 'relation',
+  delete_relation: 'relation',
   // Memories
   create_memory: 'memory',
+  update_memory: 'memory',
+  delete_memory: 'memory',
   // Timeline
   create_timeline_event: 'timeline',
   update_timeline_event: 'timeline',
+  delete_timeline_event: 'timeline',
+  // Clue board：暂无独立页面，AI 增删线索后需要跟着变的是概览/侧栏的线索计数
+  create_clue: 'stats',
+  update_clue: 'stats',
+  delete_clue: 'stats',
+  // Project phase
+  update_project_phase: 'project',
 }
 
 /** Given a list of tool call names, return the set of entity types that were modified. */
@@ -153,12 +177,15 @@ export function getModifiedEntities(toolNames: string[]): EntityType[] {
   const entities = new Set<EntityType>()
   for (const name of toolNames) {
     const entity = TOOL_ENTITY_MAP[name]
-    if (entity) entities.add(entity)
+    if (Array.isArray(entity)) entity.forEach((e) => entities.add(e))
+    else if (entity) entities.add(entity)
   }
   return [...entities]
 }
 
 /** Given a single tool call name, return the entity type if it modifies data, or null. */
 export function getEntityFromTool(toolName: string): EntityType | null {
-  return TOOL_ENTITY_MAP[toolName] ?? null
+  const entity = TOOL_ENTITY_MAP[toolName]
+  if (!entity) return null
+  return Array.isArray(entity) ? entity[0] : entity
 }

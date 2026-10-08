@@ -902,7 +902,7 @@ POST /api/ai/chat/stream
 | `api_base_url` | string | API 端点地址 |
 | `api_key` | string | API 密钥 |
 | `api_model` | string | 模型名称 |
-| `api_type` | `'openai' | 'claude'` | API 类型 |
+| `api_type` | `'openai' \| 'openai-response' \| 'claude' \| 'gemini'` | API 类型 |
 
 前端存储有更丰富的多提供商密钥管理（`apiKeyDeepseek`、`apiKeyAnthropic`、`apiKeyOpenai` 等），但后端仅有一个统一的 `api_key` 槽位。
 
@@ -1105,7 +1105,7 @@ interface Character {
 interface AppSettings {
   apiKey: string; apiKeyDeepseek: string; apiKeyAnthropic: string;
   apiKeyOpenai: string; apiBaseUrl: string; apiModel: string;
-  apiType: 'openai'|'claude'; uiLanguage: 'zh'|'en';
+  apiType: 'openai'|'openai-response'|'claude'|'gemini'; uiLanguage: 'zh'|'en';
   theme: 'dark'|'light'; editorFontSize: number;
   editorFontFamily: string; autoSaveInterval: number;
   backupEnabled: boolean; accentColor: string;

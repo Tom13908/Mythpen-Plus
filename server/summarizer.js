@@ -213,9 +213,7 @@ async function writeSummary(projectName, chapterNum, data) {
 function scanPending() {
   try {
     const fs = require('fs');
-    const path = require('path');
-    const dir = db.getProjectDbPath(''); // 拿目录（带尾随文件名，取 dirname）
-    const projectsDir = path.dirname(dir);
+    const projectsDir = db.getProjectsDir();
     if (!fs.existsSync(projectsDir)) return;
     const files = fs.readdirSync(projectsDir).filter((f) => f.endsWith('.mythpen.db'));
     for (const file of files) {

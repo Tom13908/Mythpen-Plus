@@ -19,6 +19,7 @@ import {
   X,
 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { SnapshotList } from '@/components/SnapshotList'
 import { useDataRefresh } from '@/hooks/useDataRefresh'
 import { useT } from '@/hooks/useT'
 import { projectsApi, statsApi } from '@/lib/api'
@@ -260,6 +261,14 @@ export function Dashboard() {
 
       {/* ── Grid ── */}
       <div className="grid grid-cols-3 gap-3 p-6 overflow-y-auto flex-1 auto-rows-min custom-scrollbar">
+        {/* ── 里程碑快照 ──
+            紧跟阶段条：阶段是「走到哪一步」，里程碑是「能退回哪一步」，两者并排读最顺。
+            这里不复用 DashCard，因为它会把标题渲染一次，而 SnapshotList 自带标题栏
+            （打点按钮就在那一行），会重复。 */}
+        <div className="col-span-3 bg-[var(--canvas-card)] border border-[var(--hairline)] rounded-lg p-5">
+          <SnapshotList project={project} />
+        </div>
+
         {/* ── 写作进度 ── */}
         <DashCard icon={BarChartHorizontal} title={t('pages.cardProgress')}>
           <div className="font-mono text-[28px] text-[var(--accent-gold)]">

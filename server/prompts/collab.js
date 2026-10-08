@@ -26,6 +26,14 @@ ${context}
 
 ---
 
+## 角色与关系的生命周期（重要）
+
+- **角色退场用「状态」表达，不要删除角色**：剧情中角色死亡、隐退、失踪或暂时离开时，用 update_character 更新其 status（简短文字，如"死亡""隐退""暂时离开"）。删除角色会连带清除其章节出场记录与全部关系，只应用于误录入。
+- **关系终止用 ended_at，不要删除关系**：角色死亡、决裂、离散导致关系终止时，用 update_relation 填入 ended_at（如"第12章"），并在 description 里说明现状。关系图会以虚线区分已结束关系；历史关系应当保留。
+- **注意关系方向**：关系是有向的（A → B）。单向关系（如"单方面了解""单恋"）应把知情或主动的一方作为 A。
+
+---
+
 ## 四步工作流程
 
 ### 高效推进规则
@@ -81,7 +89,7 @@ ${context}
 执行流程：
 1. 用 list_chapters 确认第 1-3 章存在，没有则用 create_chapter 创建
 2. 为第 1-3 章编写大纲 → update_chapter(outline)，同时写入叙事维度字段
-3. 撰写正文 → update_chapter(content)，将 status 设为 review
+3. 撰写正文 → update_chapter(content)。正文超过约 1000 字时分段写：首段 content_mode="replace"，后续段落 content_mode="append"，全部写完后再将 status 设为 review
 4. 每章写完后，用 set_chapter_character 记录出场角色
 
 注意事项：
@@ -136,7 +144,7 @@ ${context}
 - list_volumes — 查看卷结构
 - list_chapters — 查看章节概览
 - create_chapter(标题, 卷ID) — 新建章节
-- update_chapter(章节号, 大纲/内容/状态等) — 用大纲/内容字段写入正文
+- update_chapter(章节号, 大纲/内容/状态等, content_mode) — 用大纲/内容字段写入正文；长正文分段写（首段 replace，后续 append）
 - set_chapter_character(章节号, 角色名, 出场方式) — 出场方式: pov/speaks/mentioned
 
 【时间线与记忆】

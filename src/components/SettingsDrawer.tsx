@@ -158,7 +158,8 @@ export function SettingsDrawer() {
         setTestStatus('fail')
         try {
           const body = await res.json()
-          setTestError(body.error || `HTTP ${res.status}`)
+          // detail 里是上游原始报错（如 Google 503 的容量说明），失败时一并展示
+          setTestError(body.detail ? `${body.error}\n${body.detail}` : body.error || `HTTP ${res.status}`)
         } catch {
           setTestError(`HTTP ${res.status}`)
         }
@@ -432,6 +433,44 @@ export function SettingsDrawer() {
                 <option value="Georgia, 'Noto Serif SC', serif">Georgia</option>
               </select>
             </SettingRow>
+            <SettingRow label={t('settings.showThinking')} desc={t('settings.showThinkingDesc')}>
+              <button
+                className={`w-9 h-5 rounded-full border-none cursor-pointer relative transition-colors shrink-0
+                  ${settings.showThinking ? 'bg-[var(--accent-gold)]' : 'bg-[var(--canvas-mid)]'}`}
+                onClick={() => updateSetting('showThinking', !settings.showThinking)}
+              >
+                <span
+                  className={`absolute top-[2px] left-[2px] w-4 h-4 rounded-full bg-[var(--ink)] transition-transform ${settings.showThinking ? 'translate-x-4' : ''}`}
+                />
+              </button>
+            </SettingRow>
+            {/* ─── 思维链语言（软控制，写入 system prompt）─── */}
+            {active && (
+              <SettingRow label={t('settings.reasoningLang')} desc={t('settings.reasoningLangDesc')}>
+                <div className="flex gap-2 shrink-0">
+                  <button
+                    className={`px-[12px] h-[28px] rounded-full border-none font-sans text-[12px] cursor-pointer transition-all ${
+                      active.reasoningLang !== 'writing'
+                        ? 'bg-[var(--accent-gold)] text-[var(--canvas)] font-medium'
+                        : 'bg-[var(--canvas-mid)] text-[var(--ink-secondary)] hover:bg-[var(--canvas-pop)]'
+                    }`}
+                    onClick={() => updateProvider(active.id, { reasoningLang: 'default' })}
+                  >
+                    {t('settings.reasoningLangDefault')}
+                  </button>
+                  <button
+                    className={`px-[12px] h-[28px] rounded-full border-none font-sans text-[12px] cursor-pointer transition-all ${
+                      active.reasoningLang === 'writing'
+                        ? 'bg-[var(--accent-gold)] text-[var(--canvas)] font-medium'
+                        : 'bg-[var(--canvas-mid)] text-[var(--ink-secondary)] hover:bg-[var(--canvas-pop)]'
+                    }`}
+                    onClick={() => updateProvider(active.id, { reasoningLang: 'writing' })}
+                  >
+                    {t('settings.reasoningLangWriting')}
+                  </button>
+                </div>
+              </SettingRow>
+            )}
           </div>
 
           {/* ── Accent Color ── */}
@@ -515,6 +554,7 @@ export function SettingsDrawer() {
                     <option value="openai">OpenAI</option>
                     <option value="openai-response">OpenAI Responses</option>
                     <option value="claude">Anthropic</option>
+                    <option value="gemini">Gemini</option>
                   </select>
                 </SettingRow>
                 <SettingRow label={t('settings.apiBaseUrl')}>
@@ -720,9 +760,11 @@ export function SettingsDrawer() {
                   href={
                     settings.apiType === 'claude'
                       ? 'https://console.anthropic.com/'
-                      : settings.apiBaseUrl.includes('openai')
-                        ? 'https://platform.openai.com/api-keys'
-                        : 'https://platform.deepseek.com/api_keys'
+                      : settings.apiType === 'gemini'
+                        ? 'https://aistudio.google.com/app/apikey'
+                        : settings.apiBaseUrl.includes('openai')
+                          ? 'https://platform.openai.com/api-keys'
+                          : 'https://platform.deepseek.com/api_keys'
                   }
                   target="_blank"
                   rel="noopener noreferrer"

@@ -1,4 +1,8 @@
 import {
+  Brain,
+  Check,
+  ChevronDown,
+  History,
   Lightbulb,
   Loader,
   MessageSquare,
@@ -13,6 +17,7 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { MarkdownContent } from '@/components/MarkdownContent'
+import { SnapshotList } from '@/components/SnapshotList'
 import { ToastContainer } from '@/components/ToastContainer'
 import { useT } from '@/hooks/useT'
 import { useToast } from '@/hooks/useToast'
@@ -55,6 +60,10 @@ export function AIPanel() {
   const scrollContainerRef = useRef<HTMLDivElement | null>(null)
   const inputRef = useRef<HTMLTextAreaElement | null>(null)
   const streamRef = useRef('')
+  // 思考链：只存当前任务的实时内容，不写库（避免 chat_messages 迁移）
+  const [reasoningText, setReasoningText] = useState('')
+  const reasoningRef = useRef('')
+  const [thinkingCollapsed, setThinkingCollapsed] = useState(false)
   const runningRef = useRef(false)
   const msgIdCounter = useRef(0)
   const sessionsLoadedRef = useRef(false)
@@ -64,6 +73,10 @@ export function AIPanel() {
   const [toolCalls, setToolCalls] = useState<any[]>([])
   const toolCallsRef = useRef<any[]>([])
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [snapshotOpen, setSnapshotOpen] = useState(false)
+  // 还原里程碑后会话可能整批消失。把这个计数器挂到下面「加载会话 + 没有就新建」那个
+  // effect 的依赖上，还原完递增一次即可让那一段整体重跑，不必把逻辑抄第二遍。
+  const [sessionReloadNonce, setSessionReloadNonce] = useState(0)
   const [editingMsgId, setEditingMsgId] = useState<string | null>(null)
   const [editDraft, setEditDraft] = useState('')
   const [renamingSession, setRenamingSession] = useState(false)
@@ -72,7 +85,21 @@ export function AIPanel() {
   const [elapsedSec, setElapsedSec] = useState(0)
   const { toasts, show: showToast } = useToast()
   const { t } = useT()
-  const { providers, activeProviderId, providersLoaded, loadProviders, switchProvider } = useSettingsStore()
+  const { providers, activeProviderId, providersLoaded, loadProviders, switchProvider, settings, updateProvider } =
+    useSettingsStore()
+
+  // 思考档位（每档案）：按钮位于输入框发送键左侧。
+  // 注意：必须放在 t / providers 的声明之后，否则触发 TDZ 运行时错误导致整页白屏。
+  const [thinkingOpen, setThinkingOpen] = useState(false)
+  const activeProvider = providers.find((p) => p.id === activeProviderId) || providers[0]
+  const thinkingLevel = activeProvider?.thinkingLevel || 'default'
+  const thinkingLevels = [
+    { value: 'default', label: t('ai.tlDefault'), desc: t('ai.tlDefaultDesc') },
+    { value: 'off', label: t('ai.tlOff'), desc: t('ai.tlOffDesc') },
+    { value: 'low', label: t('ai.tlLow'), desc: t('ai.tlLowDesc') },
+    { value: 'medium', label: t('ai.tlMedium'), desc: t('ai.tlMediumDesc') },
+    { value: 'high', label: t('ai.tlHigh'), desc: t('ai.tlHighDesc') },
+  ] as const
 
   useEffect(() => {
     if (!providersLoaded) loadProviders()
@@ -187,7 +214,7 @@ export function AIPanel() {
   const nextMsgId = () => `${Date.now()}-${++msgIdCounter.current}`
 
   // Helper: save message scoped to current session, then sync backend UUID id
-  const saveMsg = (data: { role: string; content: string; toolCalls?: any }, tempId?: string) => {
+  const saveMsg = (data: { role: 'user' | 'ai' | 'system'; content: string; toolCalls?: any }, tempId?: string) => {
     if (!currentSessionId) {
       console.warn('[AIPanel] No session to save message to')
       return Promise.resolve()
@@ -202,7 +229,7 @@ export function AIPanel() {
   }
 
   // Add message locally (optimistic) then persist; temp id replaced by backend UUID
-  const addAndSave = (data: { role: string; content: string; toolCalls?: any }) => {
+  const addAndSave = (data: { role: 'user' | 'ai' | 'system'; content: string; toolCalls?: any }) => {
     const tempId = nextMsgId()
     addMessage({ id: tempId, ...data })
     saveMsg(data, tempId).catch(() => {})
@@ -216,7 +243,9 @@ export function AIPanel() {
     }
   }, [messages, streamText, toolCalls])
 
-  // Load sessions and messages when project changes, auto-create session if none exists
+  // Load sessions and messages when project changes, auto-create session if none exists.
+  // sessionReloadNonce 用于「还原里程碑后」强制重跑：还原会把会话连同叙事元素一起退回，
+  // 此时需要的就是这一段（发现没有会话 → 新建一个）。
   useEffect(() => {
     if (!project) return
     sessionsLoadedRef.current = false
@@ -240,7 +269,7 @@ export function AIPanel() {
         useAgentStore.getState().loadMessages(project)
       }
     })
-  }, [project])
+  }, [project, sessionReloadNonce])
 
   // Tool type detection for colored indicators
   const getToolType = (name: string): 'read' | 'create' | 'update' | 'delete' => {
@@ -288,6 +317,8 @@ export function AIPanel() {
     setTaskName('')
     setToolCalls([])
     toolCallsRef.current = []
+    setReasoningText('')
+    reasoningRef.current = ''
   }
 
   const handleSend = () => {
@@ -319,6 +350,10 @@ export function AIPanel() {
     setGenTokens(0)
     setProgressHint('')
     streamRef.current = ''
+    // 新任务开始：清掉上一轮的思考链（完成后的思考内容保留到下一次发送）
+    setReasoningText('')
+    reasoningRef.current = ''
+    setThinkingCollapsed(false)
 
     addAndSave({ role: 'user', content: userMsg })
     setInput('')
@@ -417,6 +452,12 @@ export function AIPanel() {
       (p: any) => {
         setProgressHint(p?.hint ? `${p.hint} · 第${(p?.round ?? 0) + 1}轮` : '')
       },
+      // 思考链：每轮一次整块推送，跨轮用空行分隔
+      (r: any) => {
+        if (!r?.text) return
+        reasoningRef.current = reasoningRef.current ? `${reasoningRef.current}\n\n${r.text}` : r.text
+        setReasoningText(reasoningRef.current)
+      },
     )
   }
 
@@ -466,27 +507,41 @@ export function AIPanel() {
                   <div className="text-[11px] text-[var(--ink-tertiary)] mt-0.5 font-mono truncate">
                     {progressHint || (genTokens > 0 ? t('ai.generatedTokens', { count: genTokens }) : t('ai.running'))}
                   </div>
-                  {/* 最近工具流水：AI 每步动作的细分过程 */}
-                  {toolCalls.length > 0 && (
-                    <div className="mt-1.5 flex flex-col gap-[3px] max-h-[64px] overflow-hidden">
-                      {toolCalls.slice(-4).map((tc: any) => (
-                        <div key={tc.id} className="flex items-center gap-1.5 text-[10px] leading-none">
-                          {tc.status === 'done' ? (
-                            <ShieldCheck className="w-2.5 h-2.5 text-[var(--success)] shrink-0" />
-                          ) : (
-                            <Loader className="w-2.5 h-2.5 text-[var(--accent-gold)] shrink-0 animate-spin" />
-                          )}
-                          <span
-                            className={`font-sans truncate ${
-                              tc.status === 'done' ? 'text-[var(--ink-mute)]' : 'text-[var(--accent-gold-soft)]'
-                            }`}
-                          >
-                            {tc.hint || t('ai.progressTool', { name: tc.name, round: (tc.round ?? 0) + 1 })}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                  {/* 最近工具流水：AI 每步动作的细分过程
+                      没有任何工具处于 running 时（模型正在思考、等待下一轮）
+                      补一行黄色呼吸灯，否则界面只剩绿灯、看起来像卡死 */}
+                  <div className="mt-1.5 flex flex-col gap-[3px] max-h-[80px] overflow-hidden">
+                    {toolCalls.slice(-4).map((tc: any) => (
+                      <div key={tc.id} className="flex items-center gap-1.5 text-[10px] leading-none">
+                        <span
+                          className={`w-[6px] h-[6px] rounded-full shrink-0 inline-block ${
+                            tc.status === 'done' ? 'bg-[var(--success)]' : 'bg-[var(--warning)] animate-pulse'
+                          }`}
+                          style={
+                            tc.status === 'done'
+                              ? { boxShadow: '0 0 0 2px rgba(76,175,125,0.2)' }
+                              : { boxShadow: '0 0 0 2px rgba(212,160,64,0.2)' }
+                          }
+                        />
+                        <span
+                          className={`font-sans truncate ${
+                            tc.status === 'done' ? 'text-[var(--ink-mute)]' : 'text-[var(--accent-gold-soft)]'
+                          }`}
+                        >
+                          {tc.hint || t('ai.progressTool', { name: tc.name, round: (tc.round ?? 0) + 1 })}
+                        </span>
+                      </div>
+                    ))}
+                    {!toolCalls.some((tc: any) => tc.status === 'running') && (
+                      <div className="flex items-center gap-1.5 text-[10px] leading-none">
+                        <span
+                          className="w-[6px] h-[6px] rounded-full shrink-0 inline-block bg-[var(--warning)] animate-pulse"
+                          style={{ boxShadow: '0 0 0 2px rgba(212,160,64,0.2)' }}
+                        />
+                        <span className="text-[var(--accent-gold-soft)] font-sans truncate">{t('ai.thinkingNow')}</span>
+                      </div>
+                    )}
+                  </div>
                   {/* 进度条：工具驱动的确定性进度 + shimmer 流光动效 */}
                   <div className="h-[3px] bg-[var(--canvas-mid)] rounded-full mt-1.5 overflow-hidden">
                     <div
@@ -568,7 +623,12 @@ export function AIPanel() {
               name="ai-session-select"
               className="flex-1 h-[28px] px-2 bg-[var(--canvas-elevated)] border border-[var(--hairline)] rounded-[var(--radius-sm)] text-[var(--ink)] text-[12px] outline-none cursor-pointer focus:border-[var(--accent-gold)]"
               value={currentSessionId || ''}
-              onChange={(e) => e.target.value && switchSession(project, e.target.value)}
+              onChange={(e) => {
+                if (!e.target.value) return
+                setReasoningText('')
+                reasoningRef.current = ''
+                switchSession(project, e.target.value)
+              }}
             >
               {sessions.map((s: any, i) => (
                 <option key={`${s.id}-${i}`} value={s.id}>
@@ -606,6 +666,19 @@ export function AIPanel() {
               <X className="w-3.5 h-3.5" />
             </button>
           )}
+          {/* 里程碑：共创写进库的设定会持续影响后续每一轮的产出，
+              开局不合意时只能在库里退回去 —— 入口放在这里，与「重开共创会话」同一处。 */}
+          <button
+            className={`w-7 h-7 flex items-center justify-center rounded-[var(--radius-sm)] border cursor-pointer transition-colors shrink-0 ${
+              snapshotOpen
+                ? 'border-[var(--accent-gold)] bg-[var(--accent-gold)] text-[var(--canvas)]'
+                : 'border-[var(--hairline)] bg-[var(--canvas-elevated)] text-[var(--ink-tertiary)] hover:text-[var(--ink)] hover:bg-[var(--canvas-mid)]'
+            }`}
+            onClick={() => setSnapshotOpen((v) => !v)}
+            title={t('snapshots.title')}
+          >
+            <History className="w-3.5 h-3.5" />
+          </button>
         </div>
       </div>
 
@@ -642,7 +715,7 @@ export function AIPanel() {
               {t('ai.welcomeMessage')}
             </div>
           )}
-          {messages.map((msg) => (
+          {messages.map((msg, idx) => (
             <div key={msg.id}>
               {msg.role === 'user' && (
                 <div className="group relative p-2.5 rounded-lg text-[13px] leading-[1.6] mb-2 bg-[var(--canvas-elevated)] text-[var(--ink)]">
@@ -716,6 +789,29 @@ export function AIPanel() {
                   )}
                 </div>
               )}
+              {/* 思维链：插在最后一条用户消息之后、其 AI 回复（含工具调用记录）之前
+                  showThinking 默认开（!== false），避免旧数据缺该键时被当成关闭 */}
+              {msg.role === 'user' &&
+                !messages.slice(idx + 1).some((m) => m.role === 'user') &&
+                settings.showThinking !== false &&
+                reasoningText && (
+                  <div className="mb-2 rounded-lg border border-[var(--hairline)] bg-[var(--canvas-card)] overflow-hidden">
+                    <button
+                      className="w-full flex items-center gap-1.5 px-2.5 py-1.5 bg-none border-none cursor-pointer text-[10px] font-mono uppercase tracking-wide text-[var(--ink-mute)] hover:text-[var(--ink-secondary)] transition-colors"
+                      onClick={() => setThinkingCollapsed((v) => !v)}
+                    >
+                      <ChevronDown
+                        className={`w-3 h-3 transition-transform ${thinkingCollapsed ? '-rotate-90' : ''}`}
+                      />
+                      {t('ai.thinkingTitle')}
+                    </button>
+                    {!thinkingCollapsed && (
+                      <div className="px-2.5 pb-2.5 text-[12px] leading-[1.6] text-[var(--ink-tertiary)] whitespace-pre-wrap break-words max-h-[260px] overflow-y-auto custom-scrollbar">
+                        {reasoningText}
+                      </div>
+                    )}
+                  </div>
+                )}
               {msg.role === 'ai' && msg.content && (
                 <div
                   className={`group relative p-2.5 rounded-lg text-[13px] leading-[1.6] mb-2 ${msg.content.startsWith('完成') || msg.content.startsWith('错误') ? 'text-[var(--ink-secondary)]' : 'bg-[var(--canvas-card)] text-[var(--ink-secondary)]'}`}
@@ -897,6 +993,52 @@ export function AIPanel() {
             }}
             disabled={isRunning}
           />
+          {/* 思考档位：紧邻发送键左侧，点击展开档位 */}
+          <div className="relative shrink-0">
+            <button
+              className={`w-7 h-7 rounded-[var(--radius-sm)] border cursor-pointer flex items-center justify-center transition-colors disabled:opacity-40 ${
+                thinkingLevel === 'default'
+                  ? 'border-[var(--hairline)] bg-transparent text-[var(--ink-tertiary)] hover:text-[var(--ink)]'
+                  : 'border-[var(--accent-gold)] bg-[var(--accent-gold-soft-bg)] text-[var(--accent-gold)]'
+              }`}
+              onClick={() => setThinkingOpen((v) => !v)}
+              disabled={!activeProvider}
+              title={`${t('ai.thinkingLevel')}：${t(`ai.tl${thinkingLevel === 'default' ? 'Default' : thinkingLevel === 'off' ? 'Off' : thinkingLevel === 'low' ? 'Low' : thinkingLevel === 'medium' ? 'Medium' : 'High'}`)}`}
+            >
+              <Brain className="w-3.5 h-3.5" />
+            </button>
+            {thinkingOpen && (
+              <>
+                <div className="fixed inset-0 z-[190]" onClick={() => setThinkingOpen(false)} />
+                <div className="absolute bottom-full right-0 mb-2 w-[248px] bg-[var(--canvas-card)] border border-[var(--hairline-light)] rounded-lg shadow-xl z-[200] p-1">
+                  {thinkingLevels.map((lv) => (
+                    <button
+                      key={lv.value}
+                      className={`w-full text-left px-2.5 py-1.5 rounded-[var(--radius-sm)] cursor-pointer border-none transition-colors ${
+                        thinkingLevel === lv.value
+                          ? 'bg-[var(--accent-gold-soft-bg)]'
+                          : 'bg-transparent hover:bg-[var(--canvas-mid)]'
+                      }`}
+                      onClick={() => {
+                        if (activeProvider) updateProvider(activeProvider.id, { thinkingLevel: lv.value })
+                        setThinkingOpen(false)
+                      }}
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <span
+                          className={`text-[12px] ${thinkingLevel === lv.value ? 'text-[var(--accent-gold)] font-medium' : 'text-[var(--ink)]'}`}
+                        >
+                          {lv.label}
+                        </span>
+                        {thinkingLevel === lv.value && <Check className="w-3 h-3 text-[var(--accent-gold)] ml-auto" />}
+                      </div>
+                      <div className="text-[10px] text-[var(--ink-mute)] mt-0.5 leading-[1.4]">{lv.desc}</div>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
           <button
             className="w-7 h-7 rounded-[var(--radius-sm)] border-none bg-[var(--accent-gold)] text-[var(--canvas)] text-sm cursor-pointer flex items-center justify-center shrink-0 hover:bg-[var(--accent-gold-soft)] transition-colors disabled:opacity-40"
             onClick={handleSend}
@@ -917,6 +1059,26 @@ export function AIPanel() {
         </div>
       </div>
       <ToastContainer toasts={toasts} />
+
+      {/* 里程碑弹出层。用覆盖层而不是贴着按钮的浮层：侧栏宽度可变，
+          贴边浮层容易被面板的滚动区域裁掉。 */}
+      {snapshotOpen && project && (
+        <div
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-[200]"
+          onClick={() => setSnapshotOpen(false)}
+        >
+          <div
+            className="bg-[var(--canvas-card)] border border-[var(--hairline)] rounded-xl p-5 w-[480px] max-h-[80vh] overflow-y-auto custom-scrollbar shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <SnapshotList
+              project={project}
+              onClose={() => setSnapshotOpen(false)}
+              onRestored={() => setSessionReloadNonce((n) => n + 1)}
+            />
+          </div>
+        </div>
+      )}
 
       {confirmDelete && (
         <div

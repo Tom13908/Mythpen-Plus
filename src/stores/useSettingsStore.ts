@@ -36,6 +36,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   accentColor: '#c9a96e',
   maxOutputTokens: 8192,
   httpTimeout: 300,
+  showThinking: true,
 }
 
 const STORAGE_KEY = 'mythpen-settings'
@@ -93,28 +94,21 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   loadFromServer: async () => {
     try {
       const serverSettings = await settingsApi.get()
-      const merged = { ...DEFAULT_SETTINGS }
+      // 以本地偏好为底再覆盖服务端管理的 AI 连接字段。
+      // 旧实现按字段逐个回填本地值，会漏掉新增的本地偏好
+      // （showThinking / autoSaveInterval / maxOutputTokens / httpTimeout 等被重置为默认）。
+      const cur = get().settings
+      const merged: AppSettings = { ...DEFAULT_SETTINGS, ...cur }
       // Override defaults with server values
       merged.apiKey = serverSettings.api_key ?? ''
       merged.apiBaseUrl = serverSettings.api_base_url || DEFAULT_SETTINGS.apiBaseUrl
       merged.apiModel = serverSettings.api_model || DEFAULT_SETTINGS.apiModel
       // If server has no API key, fall back to current provider's per-provider slot
       if (!merged.apiKey) {
-        const cur = get().settings
         if (merged.apiBaseUrl.includes('deepseek')) merged.apiKey = cur.apiKeyDeepseek || ''
         else if (merged.apiBaseUrl.includes('anthropic')) merged.apiKey = cur.apiKeyAnthropic || ''
         else if (merged.apiBaseUrl.includes('openai')) merged.apiKey = cur.apiKeyOpenai || ''
       }
-      // Keep UI preferences from local storage
-      merged.uiLanguage = get().settings.uiLanguage
-      merged.theme = get().settings.theme
-      merged.editorFontSize = get().settings.editorFontSize
-      merged.editorFontFamily = get().settings.editorFontFamily
-      merged.accentColor = get().settings.accentColor
-      // Preserve per-provider API keys from local state (server only has one api_key slot)
-      merged.apiKeyDeepseek = get().settings.apiKeyDeepseek || DEFAULT_SETTINGS.apiKeyDeepseek
-      merged.apiKeyAnthropic = get().settings.apiKeyAnthropic || DEFAULT_SETTINGS.apiKeyAnthropic
-      merged.apiKeyOpenai = get().settings.apiKeyOpenai || DEFAULT_SETTINGS.apiKeyOpenai
       localStorage.setItem(STORAGE_KEY, JSON.stringify(merged))
       set({ settings: merged })
     } catch (e) {

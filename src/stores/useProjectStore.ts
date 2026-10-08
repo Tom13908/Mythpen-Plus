@@ -91,7 +91,8 @@ export const useProjectStore = create<ProjectState>((set) => ({
   },
 
   createProject: async (name, opts = {}) => {
-    const { mode = 'medium-novel', language = 'zh', genres = ['sci-fi', 'romance'] } = opts
+    // 写作语言不再由用户指定：LLM 从首次输入即可识别，此处只存 'auto'
+    const { mode = 'medium-novel', language = 'auto', genres = ['sci-fi', 'romance'] } = opts
     set({ loading: true, error: null })
     try {
       // 1. Create the project
