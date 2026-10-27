@@ -7,12 +7,16 @@ const { TOOLS, executeTool } = require('./tools');
 const { createAIAdapter, detectProvider, isTruncatedReason } = require('./ai-adapter');
 const { buildWritingPrompt } = require('./prompts/writing');
 const { buildCollabPrompt } = require('./prompts/collab');
+const { ToolMarkupScrubber } = require('./tool-markup');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
 // ─── Middleware ───
 app.use(cors());
+// 导入接口收 base64 的 EPUB（30MB 文件 → 约 40MB 文本），单独放宽上限。
+// 必须挂在通用 json 解析之前：先匹配到的那一个负责填充 req.body。
+app.use('/api/projects/import', express.json({ limit: '64mb' }));
 app.use(express.json({ limit: '10mb' }));
 
 // ─── Request logging ───
@@ -67,11 +71,19 @@ function getAiConfig() {
       targetWords: parseInt(map.target_words, 10) || DEFAULTS.targetWords,
       // 采样参数：undefined 表示用户未设置 → 适配器不发送该字段（黄金规则）
       temperature: map.temperature !== undefined && map.temperature !== '' ? parseFloat(map.temperature) : undefined,
-      topP: map.top_p !== undefined && map.top_p !== '' ? parseFloat(map.top_p) : undefined,
+      // 探针实测该供应商不接受 top_p 时，旧档案里残留的值也不能发（必然 400）
+      topP:
+        map.topp_supported === 'false'
+          ? undefined
+          : map.top_p !== undefined && map.top_p !== ''
+            ? parseFloat(map.top_p)
+            : undefined,
       // 思维链语言：'writing' 才注入提示词，其余/未设置不干预（黄金规则）
       reasoningLang: map.reasoning_lang || undefined,
       // 思考档位：未设置/默认 → 适配器不发送任何思考参数（黄金规则）
       thinkingLevel: map.thinking_level || undefined,
+      // HTTP 超时（秒）：未设置 → 适配器用内置默认值
+      httpTimeout: map.http_timeout ? parseFloat(map.http_timeout) : undefined,
     };
     return aiConfigCache;
   } catch (e) {
@@ -612,7 +624,18 @@ app.post('/api/ai/chat/stream', async (req, res) => {
     // 给 3 次机会，保留半截内容且不无限烧额度。
     const MAX_CONTINUE_ROUNDS = 3;
 
+    // 客户端断开（点「停止」/关窗口）后必须停止工具循环：
+    // 否则服务端会继续跑最多 120 轮、继续写库，用户看到「已停止」但内容还在变。
+    let clientGone = false;
+    req.on('close', () => {
+      if (!res.writableEnded) clientGone = true;
+    });
+
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+      if (clientGone) {
+        console.log(`[AI Stream] 客户端已断开，停止在第 ${round} 轮`);
+        break;
+      }
       // 通知前端当前进行到第几轮（模型思考期间的提示，带真实信息量）
       res.write(`event: progress\ndata: ${JSON.stringify({ round, doneTools: round, hint: roundHint(project, mode) })}\n\n`);
       console.log(`[AI Stream] Round ${round}, messages: ${conversation.length}`);
@@ -732,6 +755,12 @@ app.post('/api/ai/chat/stream', async (req, res) => {
             };
             console.warn(`[AI Stream] 工具 ${tc.name} 参数不完整（缺 ${missing.join('、')}），已拒绝执行${truncated ? ' · 本轮被截断' : ''}`);
           } else {
+            // 客户端已经走了就不再写库：工具调用会改数据，断开后继续执行等于
+            // 用户按了「停止」却仍在被修改。
+            if (clientGone) {
+              console.log(`[AI Stream] 客户端已断开，跳过工具 ${tc.name}`);
+              break;
+            }
             try {
               toolResult = executeTool(project, tc.name, tc.args);
             } catch(e) {
@@ -851,18 +880,28 @@ app.post('/api/ai/continue', async (req, res) => {
     let inputTokens = 0;
     let outputTokens = 0;
     let stopReason = '';
+    // 续写不注册工具，模型可能把工具语法当正文吐出来 —— 逐片清洗后再下发。
+    const scrubber = new ToolMarkupScrubber();
 
     try {
       for await (const event of adapter.stream(systemPrompt, messages, resolveSampling(aiConfig, req.body))) {
         if (event.type === 'chunk') {
-          fullContent += event.text;
-          res.write(`event: content_chunk\ndata: ${JSON.stringify({ text: event.text, position: fullContent.length })}\n\n`);
+          const clean = scrubber.push(event.text);
+          if (clean) {
+            fullContent += clean;
+            res.write(`event: content_chunk\ndata: ${JSON.stringify({ text: clean, position: fullContent.length })}\n\n`);
+          }
         }
         if (event.type === 'usage') {
           inputTokens = event.inputTokens || 0;
           outputTokens = event.outputTokens || 0;
           if (event.stopReason) stopReason = event.stopReason;
         }
+      }
+      const tail = scrubber.flush();
+      if (tail) {
+        fullContent += tail;
+        res.write(`event: content_chunk\ndata: ${JSON.stringify({ text: tail, position: fullContent.length })}\n\n`);
       }
     } catch (err) {
       console.error('Continue stream error:', err);

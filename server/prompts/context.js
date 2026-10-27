@@ -3,6 +3,7 @@
  * from the database and formats it for injection into system prompts.
  */
 const db = require('../db');
+const { resolveWritingLanguage } = require('../lang-detect');
 
 const GENRE_LABELS = {
   'sci-fi': '科幻', 'fantasy': '玄幻', 'romance': '言情',
@@ -98,12 +99,16 @@ function buildProjectContext(projectName, budgetToken) {
     }
     const phaseStr = PHASE_LABELS[meta.workflow_phase] || meta.workflow_phase || '选题';
 
+    // 写作语言：自动判定（最近对话 > 最近正文 > 界面语言）。
+    // 判不出就不写这一行 —— 写错比不写更糟，模型会照着错的语言走。
+    const langInfo = resolveWritingLanguage(pdb);
+    const langLine = langInfo ? `\n写作语言: ${langInfo.name}` : '';
+
     // 预算分配：基础信息（元信息/角色/伏笔）优先，剩余给章节概览
-    // 注：不显式声明写作语言——模型可从用户输入/正文直接识别，写死反而会误导外语项目
     const baseInfo = `
 项目: ${meta.name || projectName}
 创作类型: ${genreStr}
-篇幅目标: ${modeStr}
+篇幅目标: ${modeStr}${langLine}
 当前阶段: ${phaseStr}
 当前总字数: ${meta.word_count || '0'}`;
 

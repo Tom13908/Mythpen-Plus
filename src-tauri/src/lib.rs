@@ -61,8 +61,16 @@ fn request_graceful_shutdown(port: u16) -> bool {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_shell::init())
+    // 使用统计是可选的：只有构建时提供 MYTHPEN_APTABASE_KEY 才加载插件。
+    // 不提供时不注册插件，前端 track() 会静默失败，不产生任何外发请求。
+    let aptabase_key = option_env!("MYTHPEN_APTABASE_KEY").unwrap_or("");
+
+    let mut builder = tauri::Builder::default().plugin(tauri_plugin_shell::init());
+    if !aptabase_key.is_empty() {
+        builder = builder.plugin(tauri_plugin_aptabase::Builder::new(aptabase_key).build());
+    }
+
+    builder
         .setup(|app| {
             // Spawn the Express server as a sidecar process
             let sidecar = app.shell().sidecar("mythpen-server").unwrap();

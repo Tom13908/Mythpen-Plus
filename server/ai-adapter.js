@@ -208,8 +208,15 @@ function makeResponse(content, toolCalls, inputTokens, outputTokens, reasoning, 
 
 // 请求超时：中转站/供应商偶尔会挂住连接不返回，没有超时时 SSE 会永久无输出
 // （2026-09-23 Packy + GLM 实测：正常 ~10s，异常时挂满数分钟无响应）。
-// 仅用于非流式 complete()；流式接口不加，避免长回答中途被中止。
+// 默认 90s，可由设置里的 `http_timeout`（秒）覆盖；传 0 表示用默认。
 const REQUEST_TIMEOUT_MS = 90000;
+
+/** 从 apiConfig 算出实际超时毫秒数；未设置/非法值回退默认。 */
+function resolveTimeout(apiConfig, fallback) {
+  const seconds = Number(apiConfig && apiConfig.httpTimeout);
+  if (Number.isFinite(seconds) && seconds > 0) return Math.round(seconds * 1000);
+  return fallback;
+}
 
 async function fetchWithTimeout(url, options, timeoutMs = REQUEST_TIMEOUT_MS) {
   try {
@@ -477,7 +484,7 @@ class OpenAIProvider {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiConfig.apiKey}` },
       body: JSON.stringify(body),
-    });
+    }, resolveTimeout(apiConfig, REQUEST_TIMEOUT_MS));
 
     if (!response.ok) {
       const errText = await response.text();
@@ -606,7 +613,7 @@ class OpenAIResponsesProvider {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${this.apiConfig.apiKey}` },
       body: JSON.stringify(body),
-    });
+    }, resolveTimeout(this.apiConfig, REQUEST_TIMEOUT_MS));
     if (!response.ok) {
       const errText = await response.text();
       throw Object.assign(new Error(`API Error: ${response.status}`), {
@@ -916,7 +923,7 @@ class GeminiProvider {
       method: 'POST',
       headers: this._headers(),
       body: JSON.stringify(this._buildBody(systemPrompt, messages, tools, sampling)),
-    });
+    }, resolveTimeout(apiConfig, REQUEST_TIMEOUT_MS));
 
     if (!response.ok) {
       const errText = await response.text();
@@ -960,7 +967,7 @@ class GeminiProvider {
       method: 'POST',
       headers: this._headers(),
       body: JSON.stringify(this._buildBody(systemPrompt, messages, null, sampling)),
-    });
+    }, resolveTimeout(apiConfig, STREAM_CONNECT_TIMEOUT_MS));
 
     if (!response.ok) {
       const errText = await response.text();

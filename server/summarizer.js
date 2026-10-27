@@ -212,15 +212,15 @@ async function writeSummary(projectName, chapterNum, data) {
 // 扫描所有项目的待总结章节并补跑（服务启动时调用）
 function scanPending() {
   try {
+    // 按注册表遍历，而不是按文件名反推项目名：新项目的文件是 UUID 名，
+    // 从文件名反推会得到一个不存在的项目。
+    const rows = db.dbQuery('SELECT name, file_path FROM recent_projects');
     const fs = require('fs');
-    const projectsDir = db.getProjectsDir();
-    if (!fs.existsSync(projectsDir)) return;
-    const files = fs.readdirSync(projectsDir).filter((f) => f.endsWith('.mythpen.db'));
-    for (const file of files) {
-      const name = file.replace(/\.mythpen\.db$/, '');
+    for (const row of rows) {
+      if (!row.file_path || !fs.existsSync(row.file_path)) continue;
       try {
-        const rows = db.projectQuery(name, 'SELECT num FROM chapters WHERE summary_pending = 1 ORDER BY num');
-        for (const r of rows) enqueue(name, r.num);
+        const pending = db.projectQuery(row.name, 'SELECT num FROM chapters WHERE summary_pending = 1 ORDER BY num');
+        for (const r of pending) enqueue(row.name, r.num);
       } catch {
         // 项目文件可能损坏或不可读，跳过
       }

@@ -19,6 +19,10 @@ interface Props {
   initialValues?: Record<string, string>
   submitLabel?: string
   submittingLabel?: string
+  /** 传入后弹层左下角出现删除按钮，带内联二次确认。 */
+  onDelete?: () => Promise<void>
+  /** 删除确认里显示的名字，默认用标题。 */
+  deleteName?: string
 }
 
 export function SimpleCreateDialog({
@@ -29,13 +33,30 @@ export function SimpleCreateDialog({
   initialValues,
   submitLabel,
   submittingLabel,
+  onDelete,
+  deleteName,
 }: Props) {
   const [values, setValues] = useState<Record<string, string>>(initialValues || {})
   const [submitting, setSubmitting] = useState(false)
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   const { t } = useT()
   const [error, setError] = useState('')
 
   const update = (key: string, val: string) => setValues((v) => ({ ...v, [key]: val }))
+
+  const handleDelete = async () => {
+    if (!onDelete) return
+    setDeleting(true)
+    setError('')
+    try {
+      await onDelete()
+      onClose()
+    } catch (e: any) {
+      setError(e.message || t('common.deleteFailed'))
+      setDeleting(false)
+    }
+  }
 
   const handleSubmit = async () => {
     // Check required
@@ -109,20 +130,54 @@ export function SimpleCreateDialog({
           ))}
         </div>
 
-        <div className="flex gap-2 justify-end border-t border-[var(--hairline)] pt-4">
-          <button
-            className="h-[32px] px-4 rounded-lg border border-[var(--hairline-light)] bg-[var(--canvas-elevated)] text-[var(--ink)] text-[13px] cursor-pointer hover:bg-[var(--canvas-mid)]"
-            onClick={onClose}
-          >
-            {t('project.cancel')}
-          </button>
-          <button
-            className="h-[32px] px-4 rounded-lg border-none bg-[var(--accent-gold)] text-[var(--canvas)] font-medium text-[13px] cursor-pointer hover:bg-[var(--accent-gold-soft)] disabled:opacity-40"
-            onClick={handleSubmit}
-            disabled={submitting}
-          >
-            {submitting ? submittingLabel || t('common.creating') : submitLabel || t('common.create')}
-          </button>
+        <div className="flex gap-2 items-center border-t border-[var(--hairline)] pt-4">
+          {onDelete && !confirmingDelete && (
+            <button
+              type="button"
+              className="mr-auto h-[32px] px-3 rounded-lg border border-transparent bg-transparent text-[var(--error)] text-[13px] cursor-pointer hover:bg-[var(--error-soft)]"
+              onClick={() => setConfirmingDelete(true)}
+            >
+              {t('common.delete')}
+            </button>
+          )}
+          {confirmingDelete ? (
+            <>
+              <span className="mr-auto text-[12px] text-[var(--error)]">
+                {t('common.deleteConfirm', { name: deleteName || title })}
+              </span>
+              <button
+                type="button"
+                className="h-[32px] px-4 rounded-lg border border-[var(--hairline-light)] bg-[var(--canvas-elevated)] text-[var(--ink)] text-[13px] cursor-pointer hover:bg-[var(--canvas-mid)]"
+                onClick={() => setConfirmingDelete(false)}
+              >
+                {t('project.cancel')}
+              </button>
+              <button
+                type="button"
+                className="h-[32px] px-4 rounded-lg border-none bg-[var(--error)] text-white font-medium text-[13px] cursor-pointer hover:opacity-90 disabled:opacity-40"
+                onClick={handleDelete}
+                disabled={deleting}
+              >
+                {deleting ? t('common.saving') : t('common.delete')}
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                className="h-[32px] px-4 rounded-lg border border-[var(--hairline-light)] bg-[var(--canvas-elevated)] text-[var(--ink)] text-[13px] cursor-pointer hover:bg-[var(--canvas-mid)]"
+                onClick={onClose}
+              >
+                {t('project.cancel')}
+              </button>
+              <button
+                className="h-[32px] px-4 rounded-lg border-none bg-[var(--accent-gold)] text-[var(--canvas)] font-medium text-[13px] cursor-pointer hover:bg-[var(--accent-gold-soft)] disabled:opacity-40"
+                onClick={handleSubmit}
+                disabled={submitting}
+              >
+                {submitting ? submittingLabel || t('common.creating') : submitLabel || t('common.create')}
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>

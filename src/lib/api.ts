@@ -41,6 +41,16 @@ export const projectsApi = {
   list: () => request('/projects'),
   get: (name: string) => request(`/projects/${encodeURIComponent(name)}`),
   create: (data: any) => request('/projects', { method: 'POST', body: data }),
+  /** 导入旧稿：TXT 传 text，EPUB 传 fileBase64。服务端负责切章与建项目。 */
+  import: (data: {
+    name: string
+    format: 'txt' | 'epub'
+    text?: string
+    fileBase64?: string
+    fileName?: string
+    genres?: string[]
+    mode?: string
+  }) => request('/projects/import', { method: 'POST', body: data }),
   delete: (name: string) => request(`/projects/${encodeURIComponent(name)}`, { method: 'DELETE' }),
   getPhase: (name: string) => request(`/${encodeURIComponent(name)}/workflow/phase`),
   setPhase: (name: string, phase: string) =>
@@ -117,12 +127,25 @@ export const worldApi = {
   delete: (project: string, id: string) => request(`/${encodeURIComponent(project)}/world/${id}`, { method: 'DELETE' }),
 }
 
+// ─── Project settings ───
+
+export const projectSettingsApi = {
+  /** 章节编号方式：'per-volume'（每卷从 1 开始）/ 'global'（全书连续）。 */
+  getChapterNumbering: (project: string) => request(`/${encodeURIComponent(project)}/chapter-numbering`),
+  setChapterNumbering: (project: string, mode: 'per-volume' | 'global') =>
+    request(`/${encodeURIComponent(project)}/chapter-numbering`, { method: 'PUT', body: { mode } }),
+}
+
 // ─── Science ───
 
 export const scienceApi = {
   list: (project: string) => request(`/${encodeURIComponent(project)}/science`),
   create: (project: string, data: any) =>
     request(`/${encodeURIComponent(project)}/science`, { method: 'POST', body: data }),
+  update: (project: string, id: string, data: any) =>
+    request(`/${encodeURIComponent(project)}/science/${encodeURIComponent(id)}`, { method: 'PUT', body: data }),
+  remove: (project: string, id: string) =>
+    request(`/${encodeURIComponent(project)}/science/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 }
 
 // ─── Foreshadows ───

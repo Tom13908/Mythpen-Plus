@@ -39,6 +39,7 @@ export function Characters() {
     if (!selected) return
     setDraft({
       name: selected.name || '',
+      role: selected.role || '',
       age: selected.age || '',
       gender: selected.gender || '',
       appearance: selected.appearance || '',
@@ -47,6 +48,7 @@ export function Characters() {
       motivation: selected.motivation || '',
       arc: selected.arc || '',
       status: selected.status || '',
+      notes: selected.notes || '',
     })
     setSaveError('')
     setEditing(true)
@@ -116,6 +118,16 @@ export function Characters() {
           title={`+ ${t('pages.newCharacter')}`}
           fields={[
             { key: 'name', label: t('pages.name'), required: true, placeholder: t('characters.namePlaceholder') },
+            {
+              key: 'role',
+              label: t('characters.roleLabel'),
+              type: 'select',
+              options: [
+                { value: 'major', label: t('pages.roleMajor') },
+                { value: 'minor', label: t('pages.roleMinor') },
+                { value: 'extra', label: t('pages.roleExtra') },
+              ],
+            },
             { key: 'age', label: t('pages.age'), placeholder: t('characters.agePlaceholder') },
             { key: 'gender', label: t('pages.gender'), placeholder: t('characters.genderPlaceholder') },
             {
@@ -147,6 +159,12 @@ export function Characters() {
               key: 'status',
               label: t('characters.statusLabel'),
               placeholder: t('characters.statusPlaceholder'),
+            },
+            {
+              key: 'notes',
+              label: t('characters.notesLabel'),
+              type: 'textarea',
+              placeholder: t('characters.notesPlaceholder'),
             },
           ]}
           onSubmit={async (vals) => {
@@ -309,6 +327,33 @@ export function Characters() {
                     readOnly={!editing}
                     placeholder={t('characters.statusPlaceholder')}
                     onChange={(e) => setDraft((d) => ({ ...d, status: e.target.value }))}
+                  />
+                </FormField>
+              </div>
+              <div className="mb-4 flex gap-3">
+                <FormField label={t('characters.roleLabel')} full>
+                  <select
+                    className="form-input"
+                    value={editing ? (draft.role ?? '') : selected.role || ''}
+                    disabled={!editing}
+                    onChange={(e) => setDraft((d) => ({ ...d, role: e.target.value }))}
+                  >
+                    <option value="">{t('characters.roleUnset')}</option>
+                    <option value="major">{t('pages.roleMajor')}</option>
+                    <option value="minor">{t('pages.roleMinor')}</option>
+                    <option value="extra">{t('pages.roleExtra')}</option>
+                  </select>
+                </FormField>
+              </div>
+              <div className="mb-4">
+                <FormField label={t('characters.notesLabel')} full>
+                  <textarea
+                    rows={2}
+                    value={editing ? (draft.notes ?? '') : selected.notes || ''}
+                    className="form-input"
+                    readOnly={!editing}
+                    placeholder={t('characters.notesPlaceholder')}
+                    onChange={(e) => setDraft((d) => ({ ...d, notes: e.target.value }))}
                   />
                 </FormField>
               </div>

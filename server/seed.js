@@ -1,12 +1,18 @@
 /**
  * 种子数据脚本，用来创建一个名叫做 "我的科幻小说" 的示例项目，包含完整的演示数据
  */
-const { initDatabase, openProjectDb, getProjectDb, getProjectDbPath, getConfigDb } = require('./db');
+const { initDatabase, openProjectDb, getProjectDb, getProjectDbPath, allocateProjectFilePath, getConfigDb } = require('./db');
 const { v4: uuidv4 } = require('uuid');
 const fs = require('fs');
 
 function seedProject(name) {
-  const dbPath = getProjectDbPath(name);
+  // 已登记就覆盖原文件（同名重跑种子），否则分配一个新的 UUID 文件名
+  let dbPath;
+  try {
+    dbPath = getProjectDbPath(name);
+  } catch {
+    dbPath = allocateProjectFilePath();
+  }
   // Remove existing for clean seed (also wipe WAL/SHM to avoid SQLITE_IOERR_SHORT_READ)
   for (const suffix of ['', '-wal', '-shm']) {
     const f = dbPath + suffix;
@@ -145,8 +151,13 @@ function seedProject(name) {
 if (require.main === module) {
   (async () => {
     await initDatabase();
-    const dbPath = getProjectDbPath('我的科幻小说');
-    if (fs.existsSync(dbPath)) {
+    let dbPath = null;
+    try {
+      dbPath = getProjectDbPath('我的科幻小说');
+    } catch {
+      dbPath = null; // 未建过
+    }
+    if (dbPath && fs.existsSync(dbPath)) {
       // 演示项目已存在：跳过种子，保护用户在演示项目里的修改不被覆盖
       console.log('ℹ️ 演示项目已存在，跳过种子数据');
     } else {

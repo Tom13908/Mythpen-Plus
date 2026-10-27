@@ -1,15 +1,34 @@
-import { Bot, Eye, EyeOff, FolderOpen, Globe, Palette, Pen, Plus, RotateCw, SwatchBook, X, Zap } from 'lucide-react'
+import {
+  Bot,
+  Eye,
+  EyeOff,
+  FolderOpen,
+  Globe,
+  Hash,
+  Palette,
+  Pen,
+  Plus,
+  RotateCw,
+  SwatchBook,
+  X,
+  Zap,
+} from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useT } from '@/hooks/useT'
-import { modelsApi, storageApi } from '@/lib/api'
+import { LANG_OPTIONS } from '@/i18n'
+import { modelsApi, projectSettingsApi, storageApi } from '@/lib/api'
 import { refreshAllData } from '@/lib/dataEvents'
 import { modelSamplingHint, samplingRange, toppProbeLabel } from '@/lib/sampling'
 import { useEditorStore } from '@/stores/useEditorStore'
+import { useProjectStore } from '@/stores/useProjectStore'
 import { useSettingsStore } from '@/stores/useSettingsStore'
 import { useUIStore } from '@/stores/useUIStore'
 import type { AIProviderProfile } from '@/types'
 
 const ACCENT_COLORS = ['#c9a96e', '#e06c75', '#61afef', '#98c379', '#c678dd', '#d4a040', '#56b6c2']
+
+/** 自动保存间隔可选值（秒）。0 由开关负责，不在下拉里出现。 */
+const AUTO_SAVE_OPTIONS = [15, 30, 60, 120]
 
 /** Apply accent color to CSS custom property so the UI updates immediately. */
 function applyAccentColor(color: string) {
@@ -83,6 +102,29 @@ export function SettingsDrawer() {
   const [storagePathInput, setStoragePathInput] = useState('')
   const [migrating, setMigrating] = useState(false)
   const [migrateMsg, setMigrateMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+
+  // 章节编号方式是项目级设置，不是全局设置 —— 单独读接口。
+  const currentProject = useProjectStore((s) => s.currentProject)
+  const [numbering, setNumbering] = useState<'per-volume' | 'global'>('per-volume')
+
+  useEffect(() => {
+    if (!settingsOpen || !currentProject) return
+    projectSettingsApi
+      .getChapterNumbering(currentProject)
+      .then((r: any) => setNumbering(r?.mode === 'global' ? 'global' : 'per-volume'))
+      .catch(() => {})
+  }, [settingsOpen, currentProject])
+
+  const handleNumberingChange = async (mode: 'per-volume' | 'global') => {
+    if (!currentProject) return
+    const previous = numbering
+    setNumbering(mode)
+    try {
+      await projectSettingsApi.setChapterNumbering(currentProject, mode)
+    } catch {
+      setNumbering(previous)
+    }
+  }
 
   useEffect(() => {
     storageApi
@@ -186,7 +228,14 @@ export function SettingsDrawer() {
         },
       })
       if (result.toppSupported !== null) {
-        updateProvider(active.id, { toppSupported: result.toppSupported })
+        // 实测不支持时同时清掉已保存的值：否则输入框虽然禁用，
+        // 旧值仍会随请求发出去，照样 400。
+        updateProvider(
+          active.id,
+          result.toppSupported === false
+            ? { toppSupported: false, topP: undefined }
+            : { toppSupported: result.toppSupported },
+        )
       }
     } catch {
       // 探针失败不影响测试连接结果，静默保留"未探测"状态
@@ -261,22 +310,17 @@ export function SettingsDrawer() {
               <Globe className="w-3.5 h-3.5 inline-block mr-1" /> {t('settings.uiLanguage')}
             </div>
             <SettingRow label={t('settings.uiLanguage')} desc={t('settings.uiLanguageDesc')}>
-              <div className="flex gap-1">
-                <button
-                  className={`px-3 py-[5px] rounded-[var(--radius-sm)] border border-[var(--hairline)] text-[13px] cursor-pointer transition-colors
-                    ${settings.uiLanguage === 'zh' ? 'bg-[var(--accent-gold)] text-[var(--canvas)] border-[var(--accent-gold)] font-medium' : 'bg-[var(--canvas-elevated)] text-[var(--ink-secondary)] hover:bg-[var(--canvas-mid)]'}`}
-                  onClick={() => updateSetting('uiLanguage', 'zh')}
-                >
-                  {t('project.chinese')}
-                </button>
-                <button
-                  className={`px-3 py-[5px] rounded-[var(--radius-sm)] border border-[var(--hairline)] text-[13px] cursor-pointer transition-colors
-                    ${settings.uiLanguage === 'en' ? 'bg-[var(--accent-gold)] text-[var(--canvas)] border-[var(--accent-gold)] font-medium' : 'bg-[var(--canvas-elevated)] text-[var(--ink-secondary)] hover:bg-[var(--canvas-mid)]'}`}
-                  onClick={() => updateSetting('uiLanguage', 'en')}
-                >
-                  English
-                </button>
-              </div>
+              <select
+                className="h-[32px] px-2 bg-[var(--canvas-elevated)] border border-[var(--hairline)] rounded-[var(--radius-sm)] text-[var(--ink)] text-[13px] outline-none cursor-pointer focus:border-[var(--accent-gold)]"
+                value={settings.uiLanguage}
+                onChange={(e) => updateSetting('uiLanguage', e.target.value)}
+              >
+                {LANG_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
             </SettingRow>
           </div>
 
@@ -346,6 +390,25 @@ export function SettingsDrawer() {
             </div>
           </div>
 
+          {/* ── Chapter numbering（项目级） ── */}
+          {currentProject && (
+            <div className="mb-7">
+              <div className="text-[11px] font-medium text-[var(--ink-mute)] tracking-[0.06em] uppercase mb-3">
+                <Hash className="w-3.5 h-3.5 inline-block mr-1" /> {t('settings.chapterNumbering')}
+              </div>
+              <SettingRow label={t('settings.chapterNumbering')} desc={t('settings.chapterNumberingDesc')}>
+                <select
+                  className="h-[32px] px-2 bg-[var(--canvas-elevated)] border border-[var(--hairline)] rounded-[var(--radius-sm)] text-[var(--ink)] text-[13px] outline-none cursor-pointer focus:border-[var(--accent-gold)]"
+                  value={numbering}
+                  onChange={(e) => handleNumberingChange(e.target.value as 'per-volume' | 'global')}
+                >
+                  <option value="per-volume">{t('settings.chapterNumberingPerVolume')}</option>
+                  <option value="global">{t('settings.chapterNumberingGlobal')}</option>
+                </select>
+              </SettingRow>
+            </div>
+          )}
+
           {/* ── Theme ── */}
           <div className="mb-7">
             <div className="text-[11px] font-medium text-[var(--ink-mute)] tracking-[0.06em] uppercase mb-3">
@@ -412,15 +475,30 @@ export function SettingsDrawer() {
                   : t('settings.autoSaveDisabled')
               }
             >
-              <button
-                className={`w-9 h-5 rounded-full border-none cursor-pointer relative transition-colors shrink-0
+              <div className="flex items-center gap-2 shrink-0">
+                {settings.autoSaveInterval > 0 && (
+                  <select
+                    className="h-[30px] px-2 bg-[var(--canvas-elevated)] border border-[var(--hairline)] rounded-[var(--radius-sm)] text-[var(--ink)] text-[13px] outline-none cursor-pointer focus:border-[var(--accent-gold)]"
+                    value={settings.autoSaveInterval}
+                    onChange={(e) => updateSetting('autoSaveInterval', parseInt(e.target.value, 10))}
+                  >
+                    {AUTO_SAVE_OPTIONS.map((sec) => (
+                      <option key={sec} value={sec}>
+                        {t('settings.autoSaveSeconds', { seconds: sec })}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                <button
+                  className={`w-9 h-5 rounded-full border-none cursor-pointer relative transition-colors shrink-0
                   ${settings.autoSaveInterval > 0 ? 'bg-[var(--accent-gold)]' : 'bg-[var(--canvas-mid)]'}`}
-                onClick={() => updateSetting('autoSaveInterval', settings.autoSaveInterval > 0 ? 0 : 30)}
-              >
-                <span
-                  className={`absolute top-[2px] left-[2px] w-4 h-4 rounded-full bg-[var(--ink)] transition-transform ${settings.autoSaveInterval > 0 ? 'translate-x-4' : ''}`}
-                />
-              </button>
+                  onClick={() => updateSetting('autoSaveInterval', settings.autoSaveInterval > 0 ? 0 : 30)}
+                >
+                  <span
+                    className={`absolute top-[2px] left-[2px] w-4 h-4 rounded-full bg-[var(--ink)] transition-transform ${settings.autoSaveInterval > 0 ? 'translate-x-4' : ''}`}
+                  />
+                </button>
+              </div>
             </SettingRow>
             <SettingRow label={t('settings.fontFamily')}>
               <select
@@ -657,6 +735,20 @@ export function SettingsDrawer() {
                       onChange={(e) => updateProvider(active.id, { maxTokens: parseInt(e.target.value) || 0 })}
                     />
                     <span className="text-[11px] text-[var(--ink-mute)]">tokens</span>
+                  </div>
+                </SettingRow>
+                <SettingRow label={t('settings.httpTimeout')} desc={t('settings.httpTimeoutDesc')}>
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="number"
+                      className="h-[30px] px-2 w-[100px] text-right bg-[var(--canvas-elevated)] border border-[var(--hairline)] rounded-[var(--radius-sm)] text-[var(--ink)] text-[12px] outline-none focus:border-[var(--accent-gold)]"
+                      value={settings.httpTimeout || ''}
+                      min={0}
+                      step={10}
+                      placeholder="300"
+                      onChange={(e) => updateSetting('httpTimeout', parseInt(e.target.value) || 0)}
+                    />
+                    <span className="text-[11px] text-[var(--ink-mute)]">s</span>
                   </div>
                 </SettingRow>
                 <SettingRow label={t('settings.targetWordsPerChapter')} desc={t('settings.targetWordsPerChapterDesc')}>

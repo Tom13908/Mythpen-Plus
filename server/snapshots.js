@@ -65,9 +65,10 @@ function assertValidSnapshotId(id) {
 }
 
 function _projectDir(projectName) {
-  // assertValidProjectName 已挡掉分隔符、`..`、控制字符，这里再 resolve 一次确认没越界
-  const name = db.assertValidProjectName(projectName);
-  const dir = path.join(db.getSnapshotsDir(), name);
+  // 目录名用 projectDirKey：名称含 `/` 时不会再建出嵌套目录，且同名总落在同一处。
+  // 老项目（名称本身安全）目录名保持不变，已有快照不受影响。
+  db.assertValidProjectName(projectName);
+  const dir = path.join(db.getSnapshotsDir(), db.projectDirKey(projectName));
   const root = path.resolve(db.getSnapshotsDir());
   if (!path.resolve(dir).startsWith(root + path.sep)) {
     throw Object.assign(new Error('快照路径越界'), { code: 'INVALID_PROJECT_NAME' });

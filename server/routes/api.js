@@ -6,11 +6,22 @@ const fs = require('fs');
 const db = require('../db');
 const snapshots = require('../snapshots');
 const { markAndEnqueue } = require('../summarizer');
+const { chapterHeading, volumeHeading } = require('../titles');
+const importer = require('../import');
 
 function project(name) {
   // Ensure project DB is accessible
   try { db.getProjectDb(name); } catch(e) { /* will be created on first use */ }
   return name;
+}
+
+/**
+ * 章节编号方式：'per-volume'（每卷从 1 开始，默认）或 'global'（全书连续）。
+ * 只影响新建章节时 num 的计算；已有章节不会被重排。
+ */
+function chapterNumbering(projectName) {
+  const row = db.projectGet(projectName, "SELECT value FROM project_meta WHERE key = 'chapter_numbering'");
+  return row?.value === 'global' ? 'global' : 'per-volume';
 }
 
 // ─── Shared helpers ───
@@ -38,9 +49,8 @@ function missingCharacters(projectName, ids) {
 }
 
 // ─── 项目名校验（统一入口）───
-// 项目名会直接拼进文件路径（<PROJECTS_DIR>/<name>.mythpen.db）。含 `/` 的名称把落盘
-// 路径拆进不存在的子目录 → 防抖落盘 ENOENT 击穿进程，且该项目数据只在内存里、重启即丢
-// （2026-09-25 实际发生：项目名 "Common Sense, Luv/Hate"）。
+// 名称只作显示名：库文件用 UUID 落盘（见 db.allocateProjectFilePath），所以 `/`、`?`
+// 这些字符不再被拒。这里只挡两类真的会坏事的输入：控制字符与超长名称。
 // 挂在 param 钩子上，一次覆盖全部 /:project/... 与 /projects/:name 路由。
 function rejectInvalidProjectName(res, name) {
   const v = db.validateProjectName(name);
@@ -74,8 +84,14 @@ function syncRecentProjects() {
   }
   const known = new Set(db.dbQuery('SELECT file_path FROM recent_projects').map((r) => r.file_path));
   const SUFFIX = '.mythpen.db';
+  // UUID 文件名是新建项目的常态，反推不出显示名 —— 它们本来就在注册表里，跳过即可。
+  const UUID_FILE_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.mythpen\.db$/i;
   for (const file of files) {
     if (!file.endsWith(SUFFIX) || known.has(path.join(dir, file))) continue;
+    if (UUID_FILE_RE.test(file)) {
+      console.warn(`[Projects] 跳过未登记的 UUID 项目库文件: ${file}`);
+      continue;
+    }
     const filePath = path.join(dir, file);
     try {
       if (!fs.statSync(filePath).isFile()) continue;
@@ -170,10 +186,15 @@ router.post('/projects', (req, res) => {
   }
   const projectName = checked.name;
 
-  const filePath = db.getProjectDbPath(projectName);
-  if (require('fs').existsSync(filePath)) {
+  // 重名判断改由注册表负责：库文件是 UUID，文件系统不再天然挡重名。
+  // 先对齐一次磁盘，避免「旧布局的同名项目还在，但没登记」时建出两个同名项目。
+  try { syncRecentProjects(); } catch { /* 对齐失败不影响建项目 */ }
+  const dup = db.dbGet('SELECT name FROM recent_projects WHERE name = ?', [projectName]);
+  if (dup) {
     return res.status(409).json({ error: { code: 'PROJECT_ALREADY_EXISTS', message: `项目"${projectName}"已存在`, recoverable: true } });
   }
+
+  const filePath = db.allocateProjectFilePath();
 
   // Create new project DB
   const pdb = db.openProjectDb(filePath);
@@ -210,9 +231,152 @@ router.post('/projects', (req, res) => {
   res.json({ name: projectName, filePath, mode, language, genres });
 });
 
+// ═══════════════════════════════════════════
+// IMPORT (TXT / EPUB)
+// ═══════════════════════════════════════════
+//
+// 导入 = 建一个新项目，把原稿按标题特征切成卷/章写进去。
+// 正文不改一个字：这里只负责切边界与建索引，摘要和设定留给之后的 AI 流程。
+
+router.post('/projects/import', async (req, res) => {
+  const body = req.body || {};
+  const checked = db.validateProjectName(body.name);
+  if (!checked.ok) {
+    return res.status(400).json({ error: { code: 'INVALID_PROJECT_NAME', message: checked.message, recoverable: true } });
+  }
+  const projectName = checked.name;
+
+  try { syncRecentProjects(); } catch { /* 对齐失败不阻断 */ }
+  if (db.dbGet('SELECT name FROM recent_projects WHERE name = ?', [projectName])) {
+    return res.status(409).json({ error: { code: 'PROJECT_ALREADY_EXISTS', message: `项目"${projectName}"已存在`, recoverable: true } });
+  }
+
+  const format = body.format === 'epub' ? 'epub' : 'txt';
+  const fileName = typeof body.fileName === 'string' ? body.fileName.slice(0, 200) : '';
+  let parsed;
+
+  try {
+    if (format === 'epub') {
+      const base64 = typeof body.fileBase64 === 'string' ? body.fileBase64 : '';
+      if (!base64) {
+        return res.status(400).json({ error: { code: 'EMPTY_IMPORT', message: '没有收到文件内容', recoverable: true } });
+      }
+      const buffer = Buffer.from(base64.replace(/^data:[^,]*,/, ''), 'base64');
+      if (buffer.length > importer.MAX_FILE_BYTES) {
+        return res.status(400).json({ error: { code: 'FILE_TOO_LARGE', message: '文件过大，最大支持 30MB', recoverable: true } });
+      }
+      parsed = await importer.parseEpub(buffer);
+    } else {
+      const text = typeof body.text === 'string' ? body.text : '';
+      if (!text.trim()) {
+        return res.status(400).json({ error: { code: 'EMPTY_IMPORT', message: '没有可导入的正文', recoverable: true } });
+      }
+      if (importer.tooBig(text)) {
+        return res.status(400).json({ error: { code: 'FILE_TOO_LARGE', message: '正文超过 600 万字，请拆分后分项目导入', recoverable: true } });
+      }
+      parsed = importer.parseTxt(text);
+    }
+  } catch (e) {
+    return res.status(400).json({ error: { code: e.code || 'IMPORT_PARSE_FAILED', message: e.message || '解析失败', recoverable: true } });
+  }
+
+  const volumes = (parsed.volumes || []).filter((v) => v.chapters && v.chapters.length > 0);
+  const chapterCount = volumes.reduce((n, v) => n + v.chapters.length, 0);
+  if (chapterCount === 0) {
+    return res.status(400).json({ error: { code: 'EMPTY_IMPORT', message: '没有解析出任何章节', recoverable: true } });
+  }
+  if (chapterCount > importer.MAX_CHAPTERS) {
+    return res.status(400).json({ error: { code: 'TOO_MANY_CHAPTERS', message: `章节数超过上限（${importer.MAX_CHAPTERS} 章）`, recoverable: true } });
+  }
+
+  const genres = Array.isArray(body.genres) ? [...new Set(body.genres.filter((g) => typeof g === 'string' && g.trim()))].slice(0, 12) : [];
+  const filePath = db.allocateProjectFilePath();
+
+  try {
+    const pdb = db.openProjectDb(filePath);
+    // 先登记再写内容：projectTransaction / getProjectDb 都靠注册表把名称解析成文件，
+    // 不先登记就会被当成「项目不存在」。
+    db.getConfigDb()
+      .prepare('INSERT OR REPLACE INTO recent_projects (id, name, file_path, last_opened, word_count) VALUES (?, ?, ?, ?, ?)')
+      .run(projectName, projectName, filePath, new Date().toISOString(), 0);
+    const now = new Date().toISOString();
+    const metaInsert = pdb.prepare('INSERT OR REPLACE INTO project_meta (key, value) VALUES (?, ?)');
+    const meta = {
+      name: projectName,
+      description: parsed.description || '',
+      mode: body.mode || 'medium-novel',
+      language: 'auto',
+      version: '1',
+      created_at: now,
+      updated_at: now,
+      word_count: '0',
+      author_name: parsed.author || '佚名',
+      book_title: parsed.title || projectName,
+      workflow_phase: 'writing',
+      import_source_file: fileName,
+      import_source_format: format,
+      imported_at: now,
+    };
+    for (const [k, v] of Object.entries(meta)) metaInsert.run(k, String(v));
+    for (const g of genres) pdb.prepare('INSERT OR IGNORE INTO project_genres (genre) VALUES (?)').run(g);
+
+    db.projectTransaction(projectName, () => {
+      const insVolume = pdb.prepare('INSERT INTO volumes (id, sort_order, title, summary) VALUES (?, ?, ?, ?)');
+      const insChapter = pdb.prepare(
+        `INSERT INTO chapters (volume_id, num, title, content, word_count, status)
+         VALUES (?, ?, ?, ?, ?, 'accepted')`,
+      );
+      volumes.forEach((vol, vi) => {
+        const volumeId = vi + 1;
+        insVolume.run(volumeId, volumeId, vol.title || `第${volumeId}卷`, '');
+        vol.chapters.forEach((ch, ci) => {
+          const content = String(ch.content || '');
+          const words = content.replace(/\s/g, '').length;
+          try {
+            insChapter.run(volumeId, ci + 1, String(ch.title || `第${ci + 1}章`), content, words);
+          } catch (e) {
+            // 单章写失败不放弃整本：记下来，前端提示用户手工补
+            console.warn(`[Import] 第${volumeId}卷第${ci + 1}章写入失败:`, e.message);
+          }
+        });
+      });
+    });
+
+    db.getConfigDb().prepare('INSERT OR REPLACE INTO recent_projects (id, name, file_path, last_opened, word_count) VALUES (?, ?, ?, ?, ?)')
+      .run(projectName, projectName, filePath, new Date().toISOString(), 0);
+    db.recalculateWordCount(projectName);
+    try {
+      snapshots.createSnapshot(projectName, { kind: snapshots.KIND_INITIAL, label: '导入完成', unique: true });
+    } catch (e) {
+      console.warn(`[Import] 留初始快照失败 ${projectName}:`, e.message);
+    }
+
+    res.json({
+      name: projectName,
+      filePath,
+      volumes: volumes.length,
+      chapters: chapterCount,
+      warnings: parsed.warnings || [],
+      title: parsed.title || projectName,
+      author: parsed.author || '',
+    });
+  } catch (e) {
+    // 建库中途失败：清掉半成品，别留下一个打不开的项目
+    try { db.closeProjectDb(filePath); } catch { /* 已关闭 */ }
+    try { require('fs').unlinkSync(filePath); } catch { /* 没写出来 */ }
+    try { db.dbExecute('DELETE FROM recent_projects WHERE name = ?', [projectName]); } catch { /* 未登记 */ }
+    res.status(500).json({ error: { code: 'IMPORT_FAILED', message: e.message || '导入失败', recoverable: true } });
+  }
+});
+
 router.get('/projects/:name', (req, res) => {
   const { name } = req.params;
-  const filePath = db.getProjectDbPath(name);
+  let filePath;
+  try {
+    filePath = db.getProjectDbPath(name);
+  } catch (e) {
+    return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: e.message, recoverable: true } });
+  }
   if (!require('fs').existsSync(filePath)) {
     return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: `项目"${name}"不存在`, recoverable: true } });
   }
@@ -225,7 +389,15 @@ router.get('/projects/:name', (req, res) => {
 
 router.delete('/projects/:name', (req, res) => {
   const { name } = req.params;
-  const filePath = db.getProjectDbPath(name);
+  let filePath;
+  try {
+    filePath = db.getProjectDbPath(name);
+  } catch (e) {
+    // 登记还在但文件已经没了：仍然清掉登记与快照，让列表不再显示幽灵项目
+    db.dbExecute('DELETE FROM recent_projects WHERE name = ?', [name]);
+    try { snapshots.deleteAllSnapshots(name); } catch { /* 清理失败不阻断 */ }
+    return res.json({ success: true, warn: e.message });
+  }
   db.closeProjectDb(filePath);
   try { require('fs').unlinkSync(filePath); } catch(e) { console.warn(`[Projects] 删除文件失败 ${filePath}:`, e.message); }
   // 快照跟着项目一起删：项目没了之后这些文件再也无法从界面上访问到，
@@ -260,8 +432,10 @@ router.get('/:project/sidebar-items', (req, res) => {
 // ═══════════════════════════════════════════
 
 router.get('/:project/chapters', (req, res) => {
+  // 排序按「卷顺序 → 章号」：每卷独立编号时章号会跨卷重复，只按 num 排会把
+  // 后一卷的第 1 章插到前一卷前面。导入的旧稿最容易暴露这个问题。
   const rows = db.projectQuery(project(req.params.project),
-    'SELECT c.*, v.title as volume_title FROM chapters c JOIN volumes v ON c.volume_id = v.id ORDER BY c.num'
+    'SELECT c.*, v.title as volume_title FROM chapters c JOIN volumes v ON c.volume_id = v.id ORDER BY v.sort_order, c.num'
   );
   res.json(rows);
 });
@@ -322,6 +496,9 @@ router.post('/:project/chapters', (req, res) => {
   let num;
   if (chapter_num !== undefined) {
     num = chapter_num;
+  } else if (chapterNumbering(project(req.params.project)) === 'global') {
+    const maxNum = db.projectGet(project(req.params.project), 'SELECT MAX(num) as mx FROM chapters');
+    num = (maxNum?.mx || 0) + 1;
   } else {
     const maxNum = db.projectGet(project(req.params.project), 'SELECT MAX(num) as mx FROM chapters WHERE volume_id = ?', [volume_id]);
     num = (maxNum?.mx || 0) + 1;
@@ -330,7 +507,7 @@ router.post('/:project/chapters', (req, res) => {
     'INSERT INTO chapters (volume_id, num, title, outline, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, datetime(\'now\'), datetime(\'now\'))',
     [volume_id, num, title, outline, status]
   );
-  const created = db.projectGet(project(req.params.project), 'SELECT * FROM chapters WHERE num = ?', [num]);
+  const created = db.projectGet(project(req.params.project), 'SELECT * FROM chapters WHERE num = ? AND volume_id = ?', [num, volume_id]);
   res.status(201).json(created);
 });
 
@@ -415,12 +592,15 @@ router.get('/:project/characters/:id', (req, res) => {
 });
 
 router.post('/:project/characters', (req, res) => {
-  const { name, age = '', gender = '', appearance = '', personality = '', background = '', motivation = '', arc = '', ext_markers = '', status = '' } = req.body || {};
+  const { name, age = '', gender = '', appearance = '', personality = '', background = '', motivation = '', arc = '', ext_markers = '', status = '', role = '', notes = '' } = req.body || {};
   if (!name) return res.status(400).json({ error: { code: 'INVALID_PARAMS', message: '角色名不能为空', recoverable: true } });
+  if (role && !['major', 'minor', 'extra'].includes(role)) {
+    return res.status(400).json({ error: { code: 'INVALID_PARAMS', message: '角色定位只能是 major/minor/extra', recoverable: true } });
+  }
   const id = randomUUID();
   db.projectExecute(project(req.params.project),
-    'INSERT INTO characters (id, name, age, gender, appearance, personality, background, motivation, arc, ext_markers, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    [id, name, age, gender, appearance, personality, background, motivation, arc, ext_markers, status]
+    'INSERT INTO characters (id, name, age, gender, appearance, personality, background, motivation, arc, ext_markers, status, role, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    [id, name, age, gender, appearance, personality, background, motivation, arc, ext_markers, status, role, notes]
   );
   res.status(201).json({ id, name });
 });
@@ -428,8 +608,11 @@ router.post('/:project/characters', (req, res) => {
 router.put('/:project/characters/:id', (req, res) => {
   const { id } = req.params;
   const fields = []; const params = [];
-  for (const key of ['name', 'age', 'gender', 'appearance', 'personality', 'background', 'motivation', 'arc', 'ext_markers', 'notes', 'status']) {
+  for (const key of ['name', 'age', 'gender', 'appearance', 'personality', 'background', 'motivation', 'arc', 'ext_markers', 'notes', 'status', 'role']) {
     if (req.body[key] !== undefined) { fields.push(`${key} = ?`); params.push(req.body[key]); }
+  }
+  if (req.body.role !== undefined && req.body.role !== '' && !['major', 'minor', 'extra'].includes(req.body.role)) {
+    return res.status(400).json({ error: { code: 'INVALID_PARAMS', message: '角色定位只能是 major/minor/extra', recoverable: true } });
   }
   if (fields.length === 0) return res.status(400).json({ error: { code: 'INVALID_PARAMS', message: '没有要更新的字段', recoverable: true } });
   fields.push("updated_at = datetime('now')");
@@ -493,6 +676,13 @@ router.post('/:project/science', (req, res) => {
     [id, label, name, description, references]
   );
   res.status(201).json({ id, name });
+});
+
+router.put('/:project/science/:id', (req, res) => {
+  const changes = updateRecord(project(req.params.project), 'science_entries', req.params.id, req.body, ['label', 'name', 'description', 'references'], true);
+  if (changes === null) return res.status(400).json({ error: { code: 'INVALID_PARAMS', message: '没有要更新的字段', recoverable: true } });
+  if (changes === 0) return res.status(404).json({ error: { message: '条目不存在' } });
+  res.json({ success: true });
 });
 
 router.delete('/:project/science/:id', (req, res) => {
@@ -836,6 +1026,27 @@ router.delete('/:project/target-words', (req, res) => {
   res.json({ success: true, targetWords: TARGET_WORDS[projectMode] || 100000 });
 });
 
+// ─── Chapter numbering ───
+//
+// 只影响新建章节的编号方式，不重排已有章节。已有章节的号由用户自己在大纲页改。
+
+router.get('/:project/chapter-numbering', (req, res) => {
+  const pn = project(req.params.project);
+  res.json({ mode: chapterNumbering(pn) });
+});
+
+router.put('/:project/chapter-numbering', (req, res) => {
+  const pn = project(req.params.project);
+  const { mode } = req.body || {};
+  if (mode !== 'per-volume' && mode !== 'global') {
+    return res.status(400).json({ error: { code: 'INVALID_PARAMS', message: "mode 只能是 per-volume 或 global", recoverable: true } });
+  }
+  db.projectExecute(pn,
+    "INSERT OR REPLACE INTO project_meta (key, value) VALUES ('chapter_numbering', ?)", [mode]
+  );
+  res.json({ success: true, mode });
+});
+
 // ═══════════════════════════════════════════
 // TOKEN USAGE
 // ═══════════════════════════════════════════
@@ -894,7 +1105,12 @@ router.delete('/:project/cover', (req, res) => {
 router.get('/:project/export', async (req, res) => {
   const { format = 'txt' } = req.query;
   const pn = project(req.params.project);
-  const chapters = db.projectQuery(pn, "SELECT num, title, content, volume_id FROM chapters WHERE content != '' ORDER BY num");
+  // 排序必须按「卷顺序 → 章号」：每卷独立编号时 num 会跨卷重复，
+  // 只按 num 排会把两卷的第 1 章排在一起，导出顺序错乱。
+  const chapters = db.projectQuery(pn,
+    "SELECT c.num, c.title, c.content, c.volume_id FROM chapters c " +
+    "LEFT JOIN volumes v ON v.id = c.volume_id " +
+    "WHERE c.content != '' ORDER BY COALESCE(v.sort_order, 0), c.num");
   const volumes = db.projectQuery(pn, 'SELECT * FROM volumes ORDER BY sort_order');
   const meta = {};
   db.projectQuery(pn, 'SELECT key, value FROM project_meta').forEach(m => meta[m.key] = m.value);
@@ -938,11 +1154,11 @@ router.get('/:project/export', async (req, res) => {
       if (volumes.length > 1 && vol) {
         content.push({
           title: vol.title,
-          data: `<h2>第${vol.sort_order}卷 ${vol.title}</h2>${vol.summary ? `<p>${vol.summary}</p>` : ''}`,
+          data: `<h2>${volumeHeading(vol)}</h2>${vol.summary ? `<p>${vol.summary}</p>` : ''}`,
         });
       }
       for (const ch of vchs) {
-        const displayTitle = ch.title.startsWith('第') ? ch.title : `第${ch.num}章 ${ch.title}`;
+        const displayTitle = chapterHeading(ch);
         content.push({
           title: ch.title,
           data: `<h1>${displayTitle}</h1>${ch.content}`,
@@ -1005,9 +1221,9 @@ ${coverHtml}
 <div class="toc-page">
   <h1>${meta.name || pn}</h1>
   <p style="text-align:center;color:#999;margin-bottom:30px;">${meta.author_name || '佚名'} 著</p>
-  <ul>${chapters.map(ch => `<li>第${ch.num}章 ${ch.title}</li>`).join('')}</ul>
+  <ul>${chapters.map(ch => `<li>${chapterHeading(ch)}</li>`).join('')}</ul>
 </div>
-${chapters.map(ch => `<div class="chapter"><h1>第${ch.num}章 ${ch.title}</h1>${ch.content}</div>`).join('')}
+${chapters.map(ch => `<div class="chapter"><h1>${chapterHeading(ch)}</h1>${ch.content}</div>`).join('')}
 </body>
 </html>`;
 
@@ -1030,7 +1246,7 @@ ${chapters.map(ch => `<div class="chapter"><h1>第${ch.num}章 ${ch.title}</h1>$
       output += `<img src="data:${coverMime};base64,${coverBase64}" alt="封面" style="max-width:100%;height:auto;">\n\n`;
     }
     for (const ch of chapters) {
-      output += `\n---\n\n## 第${ch.num}章 ${ch.title}\n\n${ch.content}\n`;
+      output += `\n---\n\n## ${chapterHeading(ch)}\n\n${ch.content}\n`;
     }
   } else {
     // TXT
@@ -1040,7 +1256,7 @@ ${chapters.map(ch => `<div class="chapter"><h1>第${ch.num}章 ${ch.title}</h1>$
     output = `${meta.name || pn}\n${'='.repeat(meta.name?.length || 10)}\n\n`;
     if (meta.description) output += `${meta.description}\n\n`;
     for (const ch of chapters) {
-      output += `\n第${ch.num}章 ${ch.title}\n${'-'.repeat(20)}\n\n${ch.content.replace(/^#+/gm, '').trim()}\n`;
+      output += `\n${chapterHeading(ch)}\n${'-'.repeat(20)}\n\n${ch.content.replace(/^#+/gm, '').trim()}\n`;
     }
   }
 

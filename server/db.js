@@ -5,6 +5,7 @@
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const crypto = require('crypto');
 
 // ─── Storage location bootstrap ───
 // The "bootstrap" file itself always lives in the fixed default location
@@ -47,7 +48,7 @@ let configDb;    // wrapped config database
 // ═══════════════════════════════════════════════════════════════
 
 const CONFIG_SCHEMA_VERSION = 1;
-const PROJECT_SCHEMA_VERSION = 4;
+const PROJECT_SCHEMA_VERSION = 5;
 
 // ═══════════════════════════════════════════════════════════════
 // sql.js wrapper — provides a better-sqlite3-compatible API
@@ -413,17 +414,14 @@ const configMigrations = [
     const count = db.prepare('SELECT COUNT(*) as c FROM app_settings').get().c;
     if (count === 0) {
       const insert = db.prepare('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)');
+      // 只播种服务端真正会读的配置：AI 连接（api_*）与写作语言兜底（ui_language）。
+      // 外观类偏好（theme / 字号 / 字体 / 强调色 / 自动保存 / 备份开关）只存前端
+      // localStorage，写进这里也无人读取，故不再播种。
       const defaults = [
         ['api_key', ''],
         ['api_base_url', 'https://api.deepseek.com/v1'],
         ['api_model', 'deepseek-v4-flash'],
         ['ui_language', 'zh'],
-        ['theme', 'dark'],
-        ['editor_font_size', '17'],
-        ['editor_font_family', "'Noto Serif SC', 'Source Han Serif SC', 'STSong', Georgia, serif"],
-        ['auto_save_interval', '30'],
-        ['backup_enabled', 'true'],
-        ['accent_color', '#c9a96e'],
       ];
       const innerTx = db.transaction(() => {
         for (const [k, v] of defaults) insert.run(k, v);
@@ -473,15 +471,17 @@ function migrateConfig(db) {
 const projectConnections = new Map();
 
 // ═══════════════════════════════════════════════════════════════
-// 项目名校验（入口防线）
+// 项目名校验
 // ═══════════════════════════════════════════════════════════════
-// 每个项目对应 <PROJECTS_DIR>/<name>.mythpen.db。名称一旦含路径分隔符，落盘路径就被
-// 拆进不存在的子目录：第一次防抖落盘即 ENOENT，整个后端进程被击穿；而该项目的数据
-// 此时只存在于内存连接里，进程一崩即永久丢失（2026-09-25 实际发生：项目名
-// "Common Sense, Luv/Hate"）。`..` 变体还能把库文件写到 projects/ 之外。
-// 因此非法名称一律在入口拒绝，绝不交给 path.join。
-const PROJECT_NAME_MAX_LEN = 100;
-const INVALID_PROJECT_NAME_CHARS = /[\\/:*?"<>|]/; // 路径分隔符 + Windows 保留字符
+// 历史负担：旧布局是 <PROJECTS_DIR>/<name>.mythpen.db，名称含 `/` 会把路径拆进不存在的
+// 子目录（2026-09-25 实际发生过一次）。所以旧版在入口一律拒绝这类名称。
+// 现在库文件改按 UUID 落盘（见 allocateProjectFilePath），名称与文件解耦，限制可以放开。
+// 只挡两类真的会坏事的东西：控制字符（破坏界面与 JSON），超长名称（撑爆列表与文件系统）。
+const PROJECT_NAME_MAX_LEN = 200;
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHARS_RE = /[\u0000-\u001f\u007f]/;
+// 名称会被用作附属目录名（封面 / 导出 / 快照）时，这些字符需要替换掉
+const UNSAFE_DIR_CHARS_RE = /[\\/:*?"<>|]/;
 
 function validateProjectName(name) {
   if (typeof name !== 'string') return { ok: false, message: '项目名称必须是文本' };
@@ -491,15 +491,24 @@ function validateProjectName(name) {
     return { ok: false, message: `项目名称不能超过 ${PROJECT_NAME_MAX_LEN} 个字符` };
   }
   if (/^\.+$/.test(trimmed)) return { ok: false, message: '项目名称不能是 "." 或 ".."' };
-  // eslint-disable-next-line no-control-regex
-  if (/[\u0000-\u001f\u007f]/.test(trimmed)) {
+  if (CONTROL_CHARS_RE.test(trimmed)) {
     return { ok: false, message: '项目名称不能包含换行、制表符等控制字符' };
   }
-  const hit = trimmed.match(new RegExp(INVALID_PROJECT_NAME_CHARS.source, 'g'));
-  if (hit) {
-    return { ok: false, message: `项目名称不能包含这些字符：${[...new Set(hit)].join(' ')}` };
-  }
   return { ok: true, name: trimmed };
+}
+
+/**
+ * 附属目录（封面 / 导出 / 快照）用的目录名。
+ *
+ * 名称合法且不含路径字符时原样返回 —— 老项目的目录名保持不变，不搬家。
+ * 含路径字符时换成「可读前缀 + 名称哈希」，既安全又稳定（同名总得到同一目录）。
+ */
+function projectDirKey(name) {
+  const base = String(name == null ? '' : name).trim() || 'project';
+  if (!UNSAFE_DIR_CHARS_RE.test(base) && !/^\.+$/.test(base)) return base;
+  const slug = base.replace(new RegExp(UNSAFE_DIR_CHARS_RE.source, 'g'), '_').slice(0, 60) || 'project';
+  const hash = crypto.createHash('sha1').update(base).digest('hex').slice(0, 8);
+  return `${slug}-${hash}`;
 }
 
 /** 校验通过返回规范化后的名称，否则抛出带 code 的错误（调用方转 400）。 */
@@ -542,8 +551,36 @@ function isValidSqliteFile(filePath) {
   }
 }
 
+/**
+ * 项目库文件的落盘位置。
+ *
+ * 先查注册表（recent_projects.file_path）：新项目的文件是 UUID 名，与显示名无关。
+ * 查不到再退回旧布局 <projects>/<name>.mythpen.db，兼容升级前建的项目。
+ * 两处都没有就抛 PROJECT_NOT_FOUND —— 绝不把「不存在的项目」当新建。
+ */
 function getProjectDbPath(name) {
-  return path.join(PROJECTS_DIR, `${assertValidProjectName(name)}.mythpen.db`);
+  try {
+    const row = dbGet('SELECT file_path FROM recent_projects WHERE name = ?', [name]);
+    if (row && row.file_path) return row.file_path;
+  } catch {
+    /* 配置库尚未初始化：按旧布局探测 */
+  }
+  const legacy = _legacyProjectPath(name);
+  if (fs.existsSync(legacy)) return legacy;
+  throw Object.assign(new Error(`项目"${name}"不存在`), { code: 'PROJECT_NOT_FOUND', status: 404 });
+}
+
+/** 旧布局的文件名。名称含路径分隔符时转义 —— 只求不崩，不再用于新建。 */
+function _legacyProjectPath(name) {
+  const v = validateProjectName(name);
+  const base = v.ok ? v.name : 'project';
+  const file = base.replace(/[\\/]/g, '_');
+  return path.join(PROJECTS_DIR, `${file}.mythpen.db`);
+}
+
+/** 新项目的落盘路径：UUID 文件名，所以显示名可以随便写（含 `/`、`?` 等）。 */
+function allocateProjectFilePath() {
+  return path.join(PROJECTS_DIR, `${crypto.randomUUID()}.mythpen.db`);
 }
 
 function openProjectDb(filePath) {
@@ -883,6 +920,11 @@ const projectMigrations = [
   (db) => {
     ensureColumn(db, 'characters', 'status', "TEXT DEFAULT ''", 'v3→v4');
   },
+  // v4 → v5: 显式角色定位（主角/配角/客串），由作者手选，取代「按章节出现次数推断」。
+  // 与上游 0.0.16 的 v5 同义但不互斥：两边都用 ensureColumn，谁先跑另一个会跳过，不会报错。
+  (db) => {
+    ensureColumn(db, 'characters', 'role', "TEXT NOT NULL DEFAULT ''", 'v4→v5');
+  },
 ];
 
 const getProjectVersion = makeVersionGetter('project_meta');
@@ -952,12 +994,12 @@ function recalculateWordCount(projectName) {
 }
 
 function getCoverDir(projectName) {
-  // 封面同样按项目名建子目录 → 与项目库同一条路径安全约束
-  return path.join(PROJECTS_DIR, assertValidProjectName(projectName));
+  // 封面按项目建子目录。名称含路径字符时用安全键，避免建出嵌套目录或越界。
+  return path.join(PROJECTS_DIR, projectDirKey(projectName));
 }
 
 function getExportsDir(projectName) {
-  return projectName ? path.join(EXPORTS_DIR, assertValidProjectName(projectName)) : EXPORTS_DIR;
+  return projectName ? path.join(EXPORTS_DIR, projectDirKey(projectName)) : EXPORTS_DIR;
 }
 
 function findCoverPath(projectName) {
@@ -1035,6 +1077,8 @@ module.exports = {
   getConfigDb,
   getProjectDb,
   getProjectDbPath,
+  allocateProjectFilePath,
+  projectDirKey,
   getProjectsDir,
   validateProjectName,
   assertValidProjectName,

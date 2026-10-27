@@ -231,11 +231,27 @@ async function main() {
 
   // ─── 9. 迁移存储目录不丢快照 ───
   console.log('\n【9】迁移存储目录');
+  // 迁移接口会改写 ~/.mythpen/.storage-location，而这个文件决定应用下次启动去哪找数据。
+  // 测试必须先记下原状态、测完原样恢复：否则应用会指向一个已被 rmSync 删掉的 /tmp
+  // 目录，用户打开应用看到的是空书库（2026-10-26 真实发生过）。
+  const bootstrapFile = path.join(require('os').homedir(), '.mythpen', '.storage-location');
+  const hadBootstrap = fs.existsSync(bootstrapFile);
+  const bootstrapPrev = hadBootstrap ? fs.readFileSync(bootstrapFile) : null;
+
   const migrateDir = fs.mkdtempSync('/tmp/mythpen-snap-migrate-');
   const mig = await api('POST', '/storage-location', { newDir: migrateDir });
   assert('迁移接口返回成功', mig.ok, mig.data);
   const copied = fs.existsSync(path.join(migrateDir, 'snapshots', P, initial.data.id, 'db.mythpen.db'));
   assert('快照已随迁移复制到新目录', copied, path.join(migrateDir, 'snapshots', P));
+
+  // 恢复引导文件：原先没有就删掉，原先有就写回原内容
+  if (hadBootstrap) fs.writeFileSync(bootstrapFile, bootstrapPrev);
+  else fs.rmSync(bootstrapFile, { force: true });
+  const bootstrapRestored = hadBootstrap
+    ? fs.readFileSync(bootstrapFile, 'utf8') === bootstrapPrev.toString('utf8')
+    : !fs.existsSync(bootstrapFile);
+  assert('迁移后已恢复存储位置引导文件', bootstrapRestored, bootstrapFile);
+
   fs.rmSync(migrateDir, { recursive: true, force: true });
 
   // ─── 10. 删除项目时清理快照 ───
@@ -243,7 +259,9 @@ async function main() {
   const snapDir = path.join(info.data.currentDir, 'snapshots', P);
   const projectDelete = await api('DELETE', `/projects/${encodeURIComponent(P)}`);
   assert('删除项目成功', projectDelete.ok, projectDelete.data);
-  assert('项目库文件已删除', !fs.existsSync(path.join(info.data.currentDir, 'projects', `${P}.mythpen.db`)));
+  // 库文件现在是 UUID 名，路径要问接口拿；按名称猜只会得到一个从未存在的路径，断言永远为真
+  const createdPath = created.data && created.data.filePath;
+  assert('项目库文件已删除', !!createdPath && !fs.existsSync(createdPath), createdPath);
   assert('快照目录已随之清理', !fs.existsSync(snapDir), snapDir);
 
   console.log(`\n${'─'.repeat(50)}`);

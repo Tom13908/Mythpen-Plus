@@ -68,6 +68,8 @@ export interface Character {
   extMarkers: string
   avatar: string
   notes: string
+  /** 角色定位，由作者手选：major（主角）/ minor（配角）/ extra（客串）；空 = 未设定 */
+  role?: string
   /** 角色当前状态（简短文字）：如"在世"、"死亡"、"隐退"、"暂时离开"；空 = 未标注 */
   status?: string
   chapterCount?: number
@@ -207,6 +209,13 @@ export interface AIProviderProfile {
   thinkingLevel?: 'default' | 'off' | 'low' | 'medium' | 'high'
 }
 
+/**
+ * 全局设置。
+ *
+ * 只存「进程内即用」的偏好：全部落 localStorage。
+ * 唯一会写到服务端的是 ui_language（写作语言判定的兜底）
+ * 与 http_timeout（适配器超时），其余字段服务端不读。
+ */
 export interface AppSettings {
   apiKey: string
   apiKeyDeepseek: string
@@ -215,14 +224,14 @@ export interface AppSettings {
   apiBaseUrl: string
   apiModel: string
   apiType: 'openai' | 'openai-response' | 'claude' | 'gemini'
-  uiLanguage: 'zh' | 'en'
+  /** 界面语言：zh / zh-TW / en / ja / ko / fr / es / ru（见 i18n 的 LANG_OPTIONS） */
+  uiLanguage: string
   theme: 'dark' | 'light'
   editorFontSize: number
   editorFontFamily: string
+  /** 自动保存间隔（秒）。0 = 关闭自动保存 */
   autoSaveInterval: number
-  backupEnabled: boolean
   accentColor: string
-  maxOutputTokens: number
   httpTimeout: number
   /** 展示侧开关：是否在 AI 面板显示模型思维链（仅影响展示，不影响请求） */
   showThinking: boolean

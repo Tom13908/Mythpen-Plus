@@ -32,6 +32,15 @@ interface ProjectState {
   loadPhase: (project: string) => Promise<void>
   setPhase: (project: string, phase: WorkflowPhase) => Promise<void>
   createProject: (name: string, opts?: { mode?: string; language?: string; genres?: string[] }) => Promise<void>
+  importProject: (payload: {
+    name: string
+    format: 'txt' | 'epub'
+    text?: string
+    fileBase64?: string
+    fileName?: string
+    genres?: string[]
+    mode?: string
+  }) => Promise<{ name: string; volumes: number; chapters: number; warnings: any[] }>
   deleteProject: (name: string) => Promise<void>
 }
 
@@ -110,6 +119,22 @@ export const useProjectStore = create<ProjectState>((set) => ({
       useSidebarStore.getState().setActivePage('page-writing')
     } catch (err) {
       set({ error: (err as any).message || t('project.createFailed'), loading: false })
+      throw err
+    }
+  },
+
+  importProject: async (payload) => {
+    set({ loading: true, error: null })
+    try {
+      const res = await projectsApi.import(payload)
+      await useProjectStore.getState().loadProjects()
+      // 导入的项目已经有正文，阶段直接算「写作中」，不建空章
+      set({ currentProject: res.name, showProjectList: false, loading: false, workflowPhase: 'writing' })
+      await useChapterStore.getState().loadChapters(res.name)
+      useSidebarStore.getState().setActivePage('page-writing')
+      return res
+    } catch (err) {
+      set({ error: (err as any).message || t('import.failed'), loading: false })
       throw err
     }
   },

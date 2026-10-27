@@ -1,7 +1,7 @@
 {
   "name": "Mythpen",
   "private": true,
-  "version": "0.09-TL.18",
+  "version": "0.09-TL.19",
   "author": "Tom13908",
   "license": "GPL-3.0",
   "packageManager": "pnpm@10.10.0",
@@ -9,12 +9,12 @@
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Tom13908/mythpen.git"
+    "url": "git+https://github.com/Tom13908/Mythpen-Plus.git"
   },
   "bugs": {
-    "url": "https://github.com/Tom13908/mythpen/issues"
+    "url": "https://github.com/Tom13908/Mythpen-Plus/issues"
   },
-  "homepage": "https://github.com/Tom13908/mythpen#readme",
+  "homepage": "https://github.com/Tom13908/Mythpen-Plus#readme",
   "scripts": {
     "dev": "vite",
     "seed": "node server/seed.js",
@@ -44,6 +44,7 @@
     "cors": "^2.8.6",
     "epub-gen": "^0.1.0",
     "express": "^5.2.1",
+    "jszip": "^3.10.2",
     "lucide-react": "^1.23.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",

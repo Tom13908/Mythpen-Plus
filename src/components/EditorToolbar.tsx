@@ -1,7 +1,8 @@
-import { Loader, Pen, RemoveFormatting, Sparkles } from 'lucide-react'
+import { Loader, Pen, Redo2, RemoveFormatting, Sparkles, Undo2 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useT } from '@/hooks/useT'
 import { aiApi } from '@/lib/api'
+import { getWritingEditor, performHistory } from '@/lib/editorHistory'
 import { useChapterStore } from '@/stores/useChapterStore'
 import { useProjectStore } from '@/stores/useProjectStore'
 
@@ -61,6 +62,13 @@ export function EditorToolbar() {
     if (editor && document.activeElement !== editor) {
       ;(editor as HTMLElement).focus()
     }
+  }, [])
+
+  const handleHistory = useCallback((action: 'undo' | 'redo') => {
+    const editor = getWritingEditor()
+    if (!editor) return
+    if (document.activeElement !== editor) editor.focus()
+    performHistory(editor, action)
   }, [])
 
   const handleFormat = useCallback(
@@ -226,6 +234,15 @@ export function EditorToolbar() {
   return (
     <div className="h-[var(--toolbar-h)] bg-[var(--canvas-soft)] border-b border-[var(--hairline)] flex items-center px-3 gap-0.5 shrink-0">
       <div className="flex gap-[1px] items-center">
+        <ToolBtn onClick={() => handleHistory('undo')} title={t('editor.undo')}>
+          <Undo2 className="w-3.5 h-3.5" />
+        </ToolBtn>
+        <ToolBtn onClick={() => handleHistory('redo')} title={t('editor.redo')}>
+          <Redo2 className="w-3.5 h-3.5" />
+        </ToolBtn>
+      </div>
+      <span className="w-px h-5 bg-[var(--hairline)] mx-1.5" />
+      <div className="flex gap-[1px] items-center">
         <ToolBtn onClick={() => handleBlock('h1')}>H1</ToolBtn>
         <ToolBtn onClick={() => handleBlock('h2')}>H2</ToolBtn>
       </div>
@@ -277,13 +294,24 @@ export function EditorToolbar() {
   )
 }
 
-function ToolBtn({ children, onClick, active }: { children: React.ReactNode; onClick?: () => void; active?: boolean }) {
+function ToolBtn({
+  children,
+  onClick,
+  active,
+  title,
+}: {
+  children: React.ReactNode
+  onClick?: () => void
+  active?: boolean
+  title?: string
+}) {
   return (
     <button
       className={`w-7 h-7 flex items-center justify-center rounded-[var(--radius-sm)] text-sm transition-colors cursor-pointer border-none
         ${active ? 'text-[var(--accent-gold)]' : 'text-[var(--ink-tertiary)]'}
         hover:bg-[var(--canvas-card)] hover:text-[var(--ink)]`}
       onClick={onClick}
+      title={title}
       onMouseDown={(e) => e.preventDefault()}
     >
       {children}

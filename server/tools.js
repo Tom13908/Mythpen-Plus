@@ -752,7 +752,11 @@ function executeTool(projectName, toolName, args) {
       if (args.chapter_num !== undefined) {
         num = args.chapter_num;
       } else {
-        const max = pdb.prepare('SELECT MAX(num) as mx FROM chapters WHERE volume_id = ?').get(volId);
+        // 编号方式跟随项目设置：global = 全书连续，per-volume = 每卷从 1 开始。
+        const numbering = pdb.prepare("SELECT value FROM project_meta WHERE key = 'chapter_numbering'").get()?.value;
+        const max = numbering === 'global'
+          ? pdb.prepare('SELECT MAX(num) as mx FROM chapters').get()
+          : pdb.prepare('SELECT MAX(num) as mx FROM chapters WHERE volume_id = ?').get(volId);
         num = (max?.mx || 0) + 1;
       }
       pdb.prepare(`INSERT INTO chapters (volume_id, num, title, outline, content, word_count, status, cognitive_frame, emotional_anchor, world_texture, concrete_mystery, interpersonal_tension, created_at, updated_at)

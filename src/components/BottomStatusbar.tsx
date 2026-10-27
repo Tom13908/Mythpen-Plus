@@ -1,6 +1,7 @@
 import { BookOpen, Database, Pen } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useT } from '@/hooks/useT'
+import { LANG_OPTIONS } from '@/i18n'
 import { projectsApi } from '@/lib/api'
 import { useStats } from '@/lib/useProjectData'
 import { useProjectStore } from '@/stores/useProjectStore'
@@ -85,7 +86,7 @@ export function BottomStatusbar() {
       </span>
 
       <span className="inline-flex items-center gap-1 text-[10px] px-[7px] py-[1px] rounded-full bg-[var(--canvas-card)] border border-[var(--hairline)] text-[var(--ink-tertiary)]">
-        UI: {settings.uiLanguage === 'zh' ? t('project.chinese') : t('project.english')}
+        UI: {LANG_OPTIONS.find((o) => o.value === settings.uiLanguage)?.label || settings.uiLanguage}
       </span>
       <span
         className="inline-flex items-center gap-1 text-[10px] px-[7px] py-[1px] rounded-full bg-[var(--canvas-card)] border"

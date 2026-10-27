@@ -214,8 +214,19 @@ export function Relations() {
       const charList = chars
         .map((c: any) => {
           const ch = c.chapterCount || 0
+          // 显式定位优先；没标注时才回退到「按出场章节数推断」。
           const role =
-            ch >= 3 ? t('relations.roleMajor') : ch >= 1 ? t('relations.roleMinor') : t('relations.roleExtra')
+            c.role === 'major'
+              ? t('relations.roleMajor')
+              : c.role === 'minor'
+                ? t('relations.roleMinor')
+                : c.role === 'extra'
+                  ? t('relations.roleExtra')
+                  : ch >= 3
+                    ? t('relations.roleMajor')
+                    : ch >= 1
+                      ? t('relations.roleMinor')
+                      : t('relations.roleExtra')
           return `${c.name}（${role}）`
         })
         .join('、')

@@ -1,7 +1,9 @@
 import { Pen } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useT } from '@/hooks/useT'
+import { performHistory } from '@/lib/editorHistory'
 import { useChapterStore } from '@/stores/useChapterStore'
+import { useEditorHistoryStore } from '@/stores/useEditorHistoryStore'
 import { useEditorStore } from '@/stores/useEditorStore'
 import { useProjectStore } from '@/stores/useProjectStore'
 import { useSettingsStore } from '@/stores/useSettingsStore'
@@ -150,20 +152,33 @@ export function EditorContent() {
   }, []) // stable — reads doSave and settings through refs
 
   // Sync editor content from store when chapter changes
+  const lastHistoryChapterIdRef = useRef<number | null>(null)
+
   const syncContent = useCallback(() => {
     if (!editorRef.current) return
     if (!chapter) {
       editorRef.current.innerHTML = ''
+      useEditorHistoryStore.getState().reset('')
+      lastHistoryChapterIdRef.current = null
       return
     }
-    editorRef.current.innerHTML = chapter.content ? renderContent(chapter.content) : ''
+    const html = chapter.content ? renderContent(chapter.content) : ''
+    if (editorRef.current.innerHTML !== html) {
+      const sameChapter = lastHistoryChapterIdRef.current === chapter.id
+      editorRef.current.innerHTML = html
+      // 同章内容被外部改写（AI 写回 / 自动保存回灌）：压一步历史，这样 Cmd+Z
+      // 能退回改写前；换章则清空历史，避免撤到上一章的正文。
+      if (sameChapter) useEditorHistoryStore.getState().record(html)
+      else useEditorHistoryStore.getState().reset(html)
+    }
+    lastHistoryChapterIdRef.current = chapter.id
     if (editorRef.current.innerHTML) {
       editorRef.current.removeAttribute('data-placeholder')
     } else {
       editorRef.current.setAttribute('data-placeholder', t('editor.startWriting'))
     }
     lastSavedContentRef.current = chapter.content || ''
-  }, [chapter])
+  }, [chapter, t])
 
   // Watch chapter changes (switching chapters) and external content updates (AI generation)
   useEffect(() => {
@@ -195,6 +210,7 @@ export function EditorContent() {
   const handleBlur = useCallback(() => {
     isEditingRef.current = false
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    if (editorRef.current) useEditorHistoryStore.getState().record(editorRef.current.innerHTML)
     doSave()
   }, [doSave])
 
@@ -202,11 +218,30 @@ export function EditorContent() {
   const handleInput = useCallback(() => {
     isEditingRef.current = true
     setIsDirty(true)
-    if (editorRef.current?.hasAttribute('data-placeholder')) {
-      editorRef.current.removeAttribute('data-placeholder')
+    if (editorRef.current) {
+      if (editorRef.current.textContent?.trim()) {
+        editorRef.current.removeAttribute('data-placeholder')
+      } else {
+        editorRef.current.setAttribute('data-placeholder', t('editor.startWriting'))
+      }
+      // 每次编辑都记一步：连续打字也能逐步撤销（栈有深度与内存上限）。
+      useEditorHistoryStore.getState().record(editorRef.current.innerHTML)
     }
     scheduleAutosave()
-  }, [scheduleAutosave])
+  }, [scheduleAutosave, t])
+
+  // Custom undo/redo — 接管 Cmd+Z / Cmd+Shift+Z / Cmd+Y。
+  const handleEditorKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (!e.metaKey && !e.ctrlKey) return
+    const key = e.key.toLowerCase()
+    if (key === 'z') {
+      e.preventDefault()
+      performHistory(e.currentTarget, e.shiftKey ? 'redo' : 'undo')
+    } else if (key === 'y') {
+      e.preventDefault()
+      performHistory(e.currentTarget, 'redo')
+    }
+  }, [])
 
   // Auto-focus editor when writing page becomes visible
   const activePage = useSidebarStore((s) => s.activePage)
@@ -282,6 +317,7 @@ export function EditorContent() {
               suppressContentEditableWarning
               onBlur={handleBlur}
               onInput={handleInput}
+              onKeyDown={handleEditorKeyDown}
               onFocus={handleFocus}
             />
           </>

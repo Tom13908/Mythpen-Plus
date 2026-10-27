@@ -104,7 +104,7 @@ Tauri v2 壳 → sidecar(bun --compile Express) → sql.js(WASM, base64 内联)
 
 未完成：
 
-- [ ] 添加 origin 并推送（GitHub: Tom13908/mythpen）。直接改 `git config` remote 曾被拦截，用 `git remote add origin <url>` 或直接 URL 推送。
+- [x] 添加 origin 并推送（GitHub: Tom13908/Mythpen-Plus）。直接改 `git config` remote 曾被拦截，用 `git remote add origin <url>` 或直接 URL 推送。
 - [ ] 若自建分发包：改 `src-tauri/tauri.conf.json` 的 `identifier`（现 `com.mythpen.desktop`，与上游冲突）。
 - [ ] 采样探针尚未对真实供应商实测（设置里点「测试连接」即触发）。
 

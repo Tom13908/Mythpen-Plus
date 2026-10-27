@@ -355,6 +355,10 @@ CREATE TABLE editor_snapshots (
 | `backup_enabled` | `true` |
 | `accent_color` | `#c9a96e` |
 
+> **现状备注（0.9.19）**：上表是 1.0 的设想。当前只播种 `api_key` / `api_base_url` /
+> `api_model` / `ui_language` 四项。外观类偏好（theme、字号、字体、自动保存、备份开关、
+> 强调色）只存前端 localStorage，服务端不写入也不读取；`backup_enabled` 已删除。
+
 ### 4.3 项目数据库 Schema ({project}.mythpen.db)
 
 每个项目独立的 SQLite 数据库，包含以下表：

@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { setLanguage } from '@/i18n'
+import { isSupportedLang, setLanguage } from '@/i18n'
 import { providersApi, settingsApi } from '@/lib/api'
 import type { AIProviderProfile, AppSettings } from '@/types'
 
@@ -32,20 +32,22 @@ const DEFAULT_SETTINGS: AppSettings = {
   editorFontSize: 17,
   editorFontFamily: "'Noto Serif SC', 'Source Han Serif SC', 'STSong', Georgia, serif",
   autoSaveInterval: 30,
-  backupEnabled: true,
   accentColor: '#c9a96e',
-  maxOutputTokens: 8192,
   httpTimeout: 300,
   showThinking: true,
 }
 
 const STORAGE_KEY = 'mythpen-settings'
 
+/** 已下线的字段：旧 localStorage 里可能还留着，读进来时清掉，避免死数据永久生效 */
+const REMOVED_KEYS = ['backupEnabled', 'maxOutputTokens']
+
 function loadSettings(): AppSettings {
   try {
     const stored = localStorage.getItem(STORAGE_KEY)
     if (stored) {
       const parsed = JSON.parse(stored)
+      for (const k of REMOVED_KEYS) delete parsed[k]
       const restored: AppSettings = { ...DEFAULT_SETTINGS, ...parsed }
       // If the active apiKey is empty, fall back to per-provider slot
       if (!restored.apiKey) {
@@ -75,12 +77,11 @@ function applyActiveToSettings(settings: AppSettings, active?: AIProviderProfile
     apiBaseUrl: active.baseUrl,
     apiModel: active.model,
     apiType: active.type,
-    maxOutputTokens: active.maxTokens,
   }
 }
 
 // Sync i18n module with persisted language preference
-if (initialSettings.uiLanguage !== 'zh') {
+if (initialSettings.uiLanguage !== 'zh' && isSupportedLang(initialSettings.uiLanguage)) {
   setLanguage(initialSettings.uiLanguage)
 }
 
@@ -96,7 +97,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       const serverSettings = await settingsApi.get()
       // 以本地偏好为底再覆盖服务端管理的 AI 连接字段。
       // 旧实现按字段逐个回填本地值，会漏掉新增的本地偏好
-      // （showThinking / autoSaveInterval / maxOutputTokens / httpTimeout 等被重置为默认）。
+      // （showThinking / autoSaveInterval / httpTimeout 等被重置为默认）。
       const cur = get().settings
       const merged: AppSettings = { ...DEFAULT_SETTINGS, ...cur }
       // Override defaults with server values
@@ -129,18 +130,16 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       localStorage.setItem(STORAGE_KEY, JSON.stringify(newSettings))
 
       // Also sync to the backend server
+      // 只把服务端真正会读的两个偏好写回：界面语言（写作语言判定的兜底）
+      // 与 HTTP 超时（适配器）。其余外观类偏好只在本地 localStorage 生效，
+      // 写进 app_settings 也无人读取，纯属冗余。
       const keyMap: Record<string, string> = {
         apiKey: 'api_key',
         apiBaseUrl: 'api_base_url',
         apiModel: 'api_model',
         apiType: 'api_type',
         uiLanguage: 'ui_language',
-        theme: 'theme',
-        editorFontSize: 'editor_font_size',
-        editorFontFamily: 'editor_font_family',
-        autoSaveInterval: 'auto_save_interval',
-        backupEnabled: 'backup_enabled',
-        accentColor: 'accent_color',
+        httpTimeout: 'http_timeout',
       }
       const dbKey = keyMap[key]
       if (dbKey) {
@@ -150,7 +149,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       const extra: Partial<SettingsState> = {}
       // When uiLanguage changes, sync the i18n module so t() returns correct locale
       if (key === 'uiLanguage') {
-        setLanguage(value as 'zh' | 'en')
+        if (isSupportedLang(value)) setLanguage(value)
         extra.langVersion = s.langVersion + 1
       }
       return { settings: newSettings, ...extra }
